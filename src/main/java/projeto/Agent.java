@@ -277,7 +277,7 @@ public class Agent {
 
 
             estadoRAG = "A submeter chave: " + chaveExtraida;
-            JsonObject resultado = arenaClient.desbloquearCofre(chaveExtraida);
+            JsonObject resultado = arenaClient.desbloquearCofre(chaveExtraida, chunkRelevante.getTexto(), chaveExtraida);
 
             if (resultado != null) {
                 String status = resultado.has("status") ? resultado.get("status").getAsString() : "";

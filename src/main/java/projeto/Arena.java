@@ -30,10 +30,18 @@ public class Arena {
 
 
     public JsonObject registar() throws Exception {
-        JsonObject corpo = new JsonObject();
-        // check swagger for register body - likely just robot_id
-        corpo.addProperty("robot_id", nomeRobo);
-        return enviarPost("/arena/" + codigoSala + "/register", corpo);
+        HttpRequest pedido = HttpRequest.newBuilder()
+                .uri(URI.create(servidorBase + "/arena/" + codigoSala + "/register?robot_id=" + nomeRobo))
+                .timeout(Duration.ofSeconds(10))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.noBody())
+                .build();
+
+        HttpResponse<String> resposta = httpClient.send(pedido, HttpResponse.BodyHandlers.ofString());
+        String corpo = resposta.body();
+        System.out.println("[Arena] Registo: HTTP " + resposta.statusCode() + " | " + corpo);
+        if (resposta.statusCode() != 200) return null;
+        return JsonParser.parseString(corpo).getAsJsonObject();
     }
 
     public JsonObject percecionar() throws Exception {
@@ -45,9 +53,8 @@ public class Arena {
 
         HttpResponse<String> resposta = httpClient.send(pedido, HttpResponse.BodyHandlers.ofString());
         String corpo = resposta.body();
-
         if (resposta.statusCode() != 200) {
-            System.err.println("[Arena] Erro ao percecionar: HTTP " + resposta.statusCode() + " | " + corpo);
+            System.err.println("[Arena] Erro ao percecionar: HTTP " + resposta.statusCode() + " | " + corpo.substring(0, Math.min(200, corpo.length())));
             return null;
         }
         return JsonParser.parseString(corpo).getAsJsonObject();
@@ -61,11 +68,27 @@ public class Arena {
         return enviarPost("/arena/action", corpo);
     }
 
-    public JsonObject desbloquearCofre(String chave) throws Exception {
-        JsonObject corpo = new JsonObject();
-        corpo.addProperty("robot_id", nomeRobo);
-        corpo.addProperty("chave", chave);  // confirm key name in swagger
-        return enviarPost("/arena/" + codigoSala + "/unlock", corpo);
+    public JsonObject desbloquearCofre(String chave, String ragChunk, String llmRaw) throws Exception {
+        String url = servidorBase + "/arena/" + codigoSala + "/unlock"
+                + "?robot_id=" + nomeRobo
+                + "&code=" + java.net.URLEncoder.encode(chave, "UTF-8")
+                + "&rag_chunk=" + java.net.URLEncoder.encode(ragChunk != null ? ragChunk : "", "UTF-8")
+                + "&llm_raw=" + java.net.URLEncoder.encode(llmRaw != null ? llmRaw : "", "UTF-8");
+
+        HttpRequest pedido = HttpRequest.newBuilder()
+                .uri(URI.create(url))
+                .timeout(Duration.ofSeconds(10))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.noBody())
+                .build();
+
+        HttpResponse<String> resposta = httpClient.send(pedido, HttpResponse.BodyHandlers.ofString());
+        String respostaCorpo = resposta.body();
+        if (resposta.statusCode() != 200) {
+            System.err.println("[Arena] Erro unlock: HTTP " + resposta.statusCode() + " | " + respostaCorpo);
+            return null;
+        }
+        return JsonParser.parseString(respostaCorpo).getAsJsonObject();
     }
 
     public String descarregarManual() throws Exception {
@@ -77,9 +100,10 @@ public class Arena {
 
         HttpResponse<String> resposta = httpClient.send(pedido, HttpResponse.BodyHandlers.ofString());
         if (resposta.statusCode() != 200) {
-            System.err.println("[Arena] Erro ao descarregar manual: HTTP " + resposta.statusCode());
+            System.err.println("[Arena] Erro manual: HTTP " + resposta.statusCode());
             return null;
         }
+        System.out.println("[Arena] Manual descarregado (" + resposta.body().length() + " chars).");
         return resposta.body();
     }
 
