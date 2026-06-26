@@ -13,7 +13,7 @@ public class Agent {
 
     private static final String SERVIDOR_ARENA  = "https://arena.pmonteiro.ovh";
     private static final int    SLEEP_MS        = 400;
-    private static final int    HP_FUGA         = 100;
+    private static final int    HP_FUGA         = 60;
 
 
     private final Arena   arenaClient;

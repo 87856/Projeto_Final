@@ -80,8 +80,9 @@ try {
     Write-Host "[OK] Ollama esta a correr." -ForegroundColor Green
 } catch {
     Write-Host "[AVISO] Ollama nao esta a correr. A tentar iniciar..." -ForegroundColor Yellow
-    Start-Process "ollama" -ArgumentList "serve" -WindowStyle Hidden
-    Start-Sleep -Seconds 3
+   Start-Process "ollama" -ArgumentList "serve" -WindowStyle Hidden
+    Write-Host "[INFO] A aguardar Ollama iniciar..." -ForegroundColor Cyan
+    Start-Sleep -Seconds 5
 
     try {
         Invoke-WebRequest -Uri "http://localhost:11434" -TimeoutSec 3 -ErrorAction Stop | Out-Null
