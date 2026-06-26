@@ -95,6 +95,7 @@ public class Agent {
         }
 
 
+        // After registar()
         try {
             JsonObject respostaRegisto = arenaClient.registar();
             System.out.println("[Agente] Registo resposta completa: " + respostaRegisto);
@@ -103,6 +104,8 @@ public class Agent {
             e.printStackTrace();
             return;
         }
+// Force one panel update immediately after registar to confirm panel works
+        painel.atualizar(null, historicoVisitas, hpAtual, 0, 0, "INIT", "testando painel");
 
 
         if (modoLLM) {
