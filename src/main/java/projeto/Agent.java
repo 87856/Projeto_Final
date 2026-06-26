@@ -216,8 +216,10 @@ public class Agent {
                 System.out.println("[Agente] Ação '" + acao + "' → status: " + status);
 
                 if ("bloqueado".equals(status)) {
-                    System.err.println("[Agente] BLOQUEADO pelo Anti-Flood! A aguardar 5s...");
-                    Thread.sleep(5000);
+                    filaAcoesPlaneadas.clear();
+                    historicoVisitas.merge(xAtual + "," + yAtual, 5, Integer::sum);  // penalize current cell heavily
+                    System.err.println("[Agente] BLOQUEADO! A aguardar 1s...");
+                    Thread.sleep(1000);
                 } else if ("eliminado".equals(status)) {
                     System.err.println("[Agente] ELIMINADO da arena!");
                     estadoRAG = "ELIMINADO";
