@@ -31,68 +31,55 @@ public class Arena {
 
     public JsonObject registar() throws Exception {
         JsonObject corpo = new JsonObject();
-        corpo.addProperty("nome_robo", nomeRobo);
-        corpo.addProperty("room", codigoSala);      // was "sala"
-        return enviarPost("/registar", corpo);
+        // check swagger for register body - likely just robot_id
+        corpo.addProperty("robot_id", nomeRobo);
+        return enviarPost("/arena/" + codigoSala + "/register", corpo);
     }
 
     public JsonObject percecionar() throws Exception {
-        String[] candidatos = {
-                "/api/percecionar?nome_robo=" + nomeRobo + "&room=" + codigoSala,
-                "/api/percepcionar?nome_robo=" + nomeRobo + "&room=" + codigoSala,
-                "/percecionar?nome_robo=" + nomeRobo + "&room=" + codigoSala,
-                "/api/percepcao?nome_robo=" + nomeRobo + "&room=" + codigoSala,
-                "/api/estado?nome_robo=" + nomeRobo + "&room=" + codigoSala,
-                "/api/percecionar?nome_robo=" + nomeRobo + "&sala=" + codigoSala,
-        };
+        HttpRequest pedido = HttpRequest.newBuilder()
+                .uri(URI.create(servidorBase + "/arena/" + codigoSala + "/perceive/" + nomeRobo))
+                .timeout(Duration.ofSeconds(10))
+                .GET()
+                .build();
 
-        for (String path : candidatos) {
-            HttpRequest pedido = HttpRequest.newBuilder()
-                    .uri(URI.create(servidorBase + path))
-                    .timeout(Duration.ofSeconds(5))
-                    .GET()
-                    .build();
-            HttpResponse<String> resposta = httpClient.send(pedido, HttpResponse.BodyHandlers.ofString());
-            System.out.println("[PROBE] " + path + " → HTTP " + resposta.statusCode() + " | " + resposta.body().substring(0, Math.min(80, resposta.body().length())));
-            if (resposta.statusCode() == 200) {
-                return JsonParser.parseString(resposta.body()).getAsJsonObject();
-            }
+        HttpResponse<String> resposta = httpClient.send(pedido, HttpResponse.BodyHandlers.ofString());
+        String corpo = resposta.body();
+
+        if (resposta.statusCode() != 200) {
+            System.err.println("[Arena] Erro ao percecionar: HTTP " + resposta.statusCode() + " | " + corpo);
+            return null;
         }
-        return null;
+        return JsonParser.parseString(corpo).getAsJsonObject();
     }
 
     public JsonObject executarAcao(String acao) throws Exception {
         JsonObject corpo = new JsonObject();
-        corpo.addProperty("nome_robo", nomeRobo);
-        corpo.addProperty("sala", codigoSala);
-        corpo.addProperty("acao", acao);
-        return enviarPost("/agir", corpo);  // was /action
+        corpo.addProperty("room_id", codigoSala);
+        corpo.addProperty("robot_id", nomeRobo);
+        corpo.addProperty("action", acao);
+        return enviarPost("/arena/action", corpo);
     }
 
     public JsonObject desbloquearCofre(String chave) throws Exception {
         JsonObject corpo = new JsonObject();
-        corpo.addProperty("nome_robo", nomeRobo);
-        corpo.addProperty("sala", codigoSala);
-        corpo.addProperty("chave", chave);
-        return enviarPost("/desbloquear", corpo);  // was /unlock
+        corpo.addProperty("robot_id", nomeRobo);
+        corpo.addProperty("chave", chave);  // confirm key name in swagger
+        return enviarPost("/arena/" + codigoSala + "/unlock", corpo);
     }
-
 
     public String descarregarManual() throws Exception {
         HttpRequest pedido = HttpRequest.newBuilder()
-                .uri(URI.create(servidorBase + "/manual?sala=" + codigoSala))
+                .uri(URI.create(servidorBase + "/arena/" + codigoSala + "/download_manual"))
                 .timeout(Duration.ofSeconds(15))
                 .GET()
                 .build();
 
         HttpResponse<String> resposta = httpClient.send(pedido, HttpResponse.BodyHandlers.ofString());
-
         if (resposta.statusCode() != 200) {
             System.err.println("[Arena] Erro ao descarregar manual: HTTP " + resposta.statusCode());
             return null;
         }
-
-        System.out.println("[Arena] Manual descarregado com sucesso (" + resposta.body().length() + " chars).");
         return resposta.body();
     }
 
