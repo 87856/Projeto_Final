@@ -128,7 +128,7 @@ public class Arena {
 
     public int extrairHP(JsonObject percepcao) {
         try {
-            return percepcao.getAsJsonObject("o_meu_estado").get("hp").getAsInt();
+            return percepcao.getAsJsonObject("o_meu_estado").get("energia").getAsInt();
         } catch (Exception e) {
             return -1;
         }
@@ -155,7 +155,9 @@ public class Arena {
 
     public String extrairEnigmaCofre(JsonObject percepcao) {
         try {
-            JsonArray cofres = percepcao.getAsJsonArray("cofres_no_mundo");
+            JsonElement cofresElem = percepcao.get("cofres_no_mundo");  // CHANGED
+            if (cofresElem == null || !cofresElem.isJsonArray()) return null;  // ADD THIS
+            JsonArray cofres = cofresElem.getAsJsonArray();  // CHANGED
             int x = extrairX(percepcao);
             int y = extrairY(percepcao);
 

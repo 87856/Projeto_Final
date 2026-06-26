@@ -310,8 +310,12 @@ public class Agent {
         if (percepcao == null || !percepcao.has("outros_robots")) return null;
 
         try {
-            JsonArray rivais = percepcao.getAsJsonArray("outros_robots");
+            JsonElement rivaisElem = percepcao.get("outros_robots");
+            if (!rivaisElem.isJsonArray()) return null;  // ADD THIS
+            JsonArray rivais = rivaisElem.getAsJsonArray();
+
             for (JsonElement elem : rivais) {
+
                 JsonObject rival = elem.getAsJsonObject();
                 int rx = rival.get("x").getAsInt();
                 int ry = rival.get("y").getAsInt();
@@ -341,12 +345,14 @@ public class Agent {
         if (percepcao == null || !percepcao.has("recursos_no_mundo")) return null;
 
         try {
-            JsonArray recursos = percepcao.getAsJsonArray("recursos_no_mundo");
+            JsonElement elem = percepcao.get("recursos_no_mundo");  // CHANGED
+            if (!elem.isJsonArray()) return null;  // ADD THIS
+            JsonArray recursos = elem.getAsJsonArray();  // CHANGED
             int melhorDist = Integer.MAX_VALUE;
             int alvoX = -1, alvoY = -1;
 
-            for (JsonElement elem : recursos) {
-                JsonObject rec = elem.getAsJsonObject();
+            for (JsonElement e : recursos) {
+                JsonObject rec = e.getAsJsonObject();
                 int rx = rec.get("x").getAsInt();
                 int ry = rec.get("y").getAsInt();
                 int dist = Math.abs(rx - xAtual) + Math.abs(ry - yAtual);
@@ -369,12 +375,14 @@ public class Agent {
         if (percepcao == null || !percepcao.has("cofres_no_mundo")) return null;
 
         try {
-            JsonArray cofres = percepcao.getAsJsonArray("cofres_no_mundo");
+            JsonElement elem = percepcao.get("cofres_no_mundo");  // CHANGED
+            if (!elem.isJsonArray()) return null;  // ADD THIS
+            JsonArray cofres = elem.getAsJsonArray();  // CHANGED
             int melhorDist = Integer.MAX_VALUE;
             int alvoX = -1, alvoY = -1;
 
-            for (JsonElement elem : cofres) {
-                JsonObject cofre = elem.getAsJsonObject();
+            for (JsonElement e : cofres) {
+                JsonObject cofre = e.getAsJsonObject();
                 int cx = cofre.get("x").getAsInt();
                 int cy = cofre.get("y").getAsInt();
                 String chaveCofre = cx + "," + cy;
@@ -411,11 +419,14 @@ public class Agent {
         Set<String> paredes = new HashSet<>();
         if (percepcao != null && percepcao.has("objetos_fixos")) {
             try {
-                JsonArray fixos = percepcao.getAsJsonArray("objetos_fixos");
-                for (JsonElement elem : fixos) {
-                    JsonObject obj = elem.getAsJsonObject();
-                    paredes.add(obj.get("x").getAsInt() + "," + obj.get("y").getAsInt());
-                }
+                JsonElement fixosElem = percepcao.get("objetos_fixos");  // CHANGED
+                if (fixosElem.isJsonArray()) {  // CHANGED (wraps the loop)
+                    JsonArray fixos = fixosElem.getAsJsonArray();  // CHANGED
+                    for (JsonElement elem : fixos) {
+                        JsonObject obj = elem.getAsJsonObject();
+                        paredes.add(obj.get("x").getAsInt() + "," + obj.get("y").getAsInt());
+                    }
+                }  // ADD THIS closing brace
             } catch (Exception ignored) {}
         }
 
