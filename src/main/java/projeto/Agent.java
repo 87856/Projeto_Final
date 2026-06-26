@@ -16,15 +16,15 @@ public class Agent {
     private static final int    HP_FUGA         = 60;
 
 
-    private final ArenaClient    arenaClient;
-    private final OllamaClient   ollamaClient;
-    private final PainelMapaCalor painel;
+    private final Arena   arenaClient;
+    private final Ollama_Client   ollamaClient;
+    private final HeatMap painel;
 
 
     private final Map<String, Integer> historicoVisitas = new HashMap<>();
     private final Set<String>          cofresFalhados   = new HashSet<>();
     private final Queue<String>        filaAcoesPlaneadas = new LinkedList<>();
-    private List<DocumentoVetorial>    baseDocumentos   = new ArrayList<>();
+    private List<Vetores>    baseDocumentos   = new ArrayList<>();
 
     private int xAtual = 0;
     private int yAtual = 0;
@@ -35,9 +35,9 @@ public class Agent {
 
     public Agent(String nomeRobo, String codigoSala, boolean modoLLM) {
         this.modoLLM     = modoLLM;
-        this.arenaClient = new ArenaClient(SERVIDOR_ARENA, nomeRobo, codigoSala);
-        this.ollamaClient = new OllamaClient();
-        this.painel      = new PainelMapaCalor(nomeRobo, modoLLM);
+        this.arenaClient = new Arena(SERVIDOR_ARENA, nomeRobo, codigoSala);
+        this.ollamaClient = new Ollama_Client();
+        this.painel      = new HeatMap(nomeRobo, modoLLM);
     }
 
 
@@ -88,7 +88,7 @@ public class Agent {
 
 
         if (modoLLM) {
-            if (!ollamaClient.verificarDisponibilidade()) {
+            if (!ollamaClient.VerifyAvailability()) {
                 System.err.println("[Agente] AVISO: Ollama não responde em localhost:11434. A mudar para modo heurístico.");
                 modoLLM = false;
             }
@@ -254,7 +254,7 @@ public class Agent {
 
         try {
             estadoRAG = "A pesquisar manual...";
-            DocumentoVetorial chunkRelevante = ollamaClient.encontrarChunkMaisRelevante(enigma, baseDocumentos);
+            Vetores chunkRelevante = ollamaClient.encontrarChunkMaisRelevante(enigma, baseDocumentos);
 
             if (chunkRelevante == null) {
                 estadoRAG = "Chunk não encontrado";
