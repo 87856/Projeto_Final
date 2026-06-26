@@ -33,14 +33,12 @@ public class Arena {
         JsonObject corpo = new JsonObject();
         corpo.addProperty("nome_robo", nomeRobo);
         corpo.addProperty("sala", codigoSala);
-
-        return enviarPost("/register", corpo);
+        return enviarPost("/registar", corpo);  // was /register
     }
-
 
     public JsonObject percecionar() throws Exception {
         HttpRequest pedido = HttpRequest.newBuilder()
-                .uri(URI.create(servidorBase + "/perceive?nome_robo=" + nomeRobo + "&sala=" + codigoSala))
+                .uri(URI.create(servidorBase + "/percecionar?nome_robo=" + nomeRobo + "&sala=" + codigoSala))
                 .timeout(Duration.ofSeconds(10))
                 .GET()
                 .build();
@@ -56,24 +54,20 @@ public class Arena {
         return JsonParser.parseString(corpo).getAsJsonObject();
     }
 
-
     public JsonObject executarAcao(String acao) throws Exception {
         JsonObject corpo = new JsonObject();
         corpo.addProperty("nome_robo", nomeRobo);
         corpo.addProperty("sala", codigoSala);
         corpo.addProperty("acao", acao);
-
-        return enviarPost("/action", corpo);
+        return enviarPost("/agir", corpo);  // was /action
     }
-
 
     public JsonObject desbloquearCofre(String chave) throws Exception {
         JsonObject corpo = new JsonObject();
         corpo.addProperty("nome_robo", nomeRobo);
         corpo.addProperty("sala", codigoSala);
         corpo.addProperty("chave", chave);
-
-        return enviarPost("/unlock", corpo);
+        return enviarPost("/desbloquear", corpo);  // was /unlock
     }
 
 
