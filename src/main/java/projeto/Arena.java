@@ -37,21 +37,28 @@ public class Arena {
     }
 
     public JsonObject percecionar() throws Exception {
-        HttpRequest pedido = HttpRequest.newBuilder()
-                .uri(URI.create(servidorBase + "/percecionar?nome_robo=" + nomeRobo + "&room=" + codigoSala))  // was &sala=
-                .timeout(Duration.ofSeconds(10))
-                .GET()
-                .build();
+        String[] candidatos = {
+                "/api/percecionar?nome_robo=" + nomeRobo + "&room=" + codigoSala,
+                "/api/percepcionar?nome_robo=" + nomeRobo + "&room=" + codigoSala,
+                "/percecionar?nome_robo=" + nomeRobo + "&room=" + codigoSala,
+                "/api/percepcao?nome_robo=" + nomeRobo + "&room=" + codigoSala,
+                "/api/estado?nome_robo=" + nomeRobo + "&room=" + codigoSala,
+                "/api/percecionar?nome_robo=" + nomeRobo + "&sala=" + codigoSala,
+        };
 
-        HttpResponse<String> resposta = httpClient.send(pedido, HttpResponse.BodyHandlers.ofString());
-        String corpo = resposta.body();
-
-        if (resposta.statusCode() != 200) {
-            System.err.println("[Arena] Erro ao percecionar: HTTP " + resposta.statusCode() + " | " + corpo);
-            return null;
+        for (String path : candidatos) {
+            HttpRequest pedido = HttpRequest.newBuilder()
+                    .uri(URI.create(servidorBase + path))
+                    .timeout(Duration.ofSeconds(5))
+                    .GET()
+                    .build();
+            HttpResponse<String> resposta = httpClient.send(pedido, HttpResponse.BodyHandlers.ofString());
+            System.out.println("[PROBE] " + path + " → HTTP " + resposta.statusCode() + " | " + resposta.body().substring(0, Math.min(80, resposta.body().length())));
+            if (resposta.statusCode() == 200) {
+                return JsonParser.parseString(resposta.body()).getAsJsonObject();
+            }
         }
-
-        return JsonParser.parseString(corpo).getAsJsonObject();
+        return null;
     }
 
     public JsonObject executarAcao(String acao) throws Exception {
