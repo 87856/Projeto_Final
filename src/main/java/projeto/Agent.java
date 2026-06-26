@@ -12,8 +12,8 @@ public class Agent {
 
 
     private static final String SERVIDOR_ARENA  = "https://arena.pmonteiro.ovh";
-    private static final int    SLEEP_MS        = 400; // >= 350ms para evitar Anti-Flood
-    private static final int    HP_FUGA         = 60;  // abaixo deste HP entra em modo de fuga
+    private static final int    SLEEP_MS        = 400;
+    private static final int    HP_FUGA         = 60;
 
 
     private final ArenaClient    arenaClient;
