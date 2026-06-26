@@ -1,0 +1,5 @@
+1st -→ qwen2.5-coder:0.5b-instruct-q4_K_M
+
+Seems to halucinate a bit, doesnt get all 4 chests 1/4.
+
+2st llama3.2:3b(testing) -→

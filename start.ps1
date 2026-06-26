@@ -100,9 +100,9 @@ if ($models -notmatch "nomic-embed-text") {
     Write-Host "[AVISO] Modelo 'nomic-embed-text' nao encontrado. A descarregar..." -ForegroundColor Yellow
     ollama pull nomic-embed-text
 }
-if ($models -notmatch "qwen2.5-coder") {
-    Write-Host "[AVISO] Modelo 'qwen2.5-coder:0.5b-instruct' nao encontrado. A descarregar..." -ForegroundColor Yellow
-    ollama pull qwen2.5-coder:0.5b-instruct-q4_K_M
+if ($models -notmatch "llama3.2") {
+    Write-Host "[AVISO] Modelo 'llama3.2:3b' nao encontrado. A descarregar..." -ForegroundColor Yellow
+    ollama pull llama3.2:3b
 }
 Write-Host "[OK] Modelos verificados." -ForegroundColor Green
 
