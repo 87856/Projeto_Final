@@ -97,9 +97,10 @@ public class Agent {
 
         try {
             JsonObject respostaRegisto = arenaClient.registar();
-            System.out.println("[Agente] Registo: " + respostaRegisto);
+            System.out.println("[Agente] Registo resposta completa: " + respostaRegisto);
         } catch (Exception e) {
             System.err.println("[Agente] Falha no registo: " + e.getMessage());
+            e.printStackTrace();
             return;
         }
 
