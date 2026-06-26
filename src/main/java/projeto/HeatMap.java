@@ -96,18 +96,18 @@ public class HeatMap extends JPanel {
         Graphics2D g2d = (Graphics2D) g;
         g2d.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
 
-        desenharTitulo(g2d);
-        desenharGrelha(g2d);
-        desenharMapaDeCalor(g2d);
-        desenharObjetosFixos(g2d);
-        desenharRecursos(g2d);
-        desenharCofres(g2d);
-        desenharOutrosRobos(g2d);
-        desenharAgente(g2d);
-        desenharLegenda(g2d);
+        DrawTitle(g2d);
+        DrawGrid(g2d);
+        DrawHeatMap(g2d);
+        DrawFixedObjects(g2d);
+        DrawResources(g2d);
+        DrawChests(g2d);
+        DrawOtherAgents(g2d);
+        DrawAgent(g2d);
+        DrawLegend(g2d);
     }
 
-    private void desenharTitulo(Graphics2D g) {
+    private void DrawTitle(Graphics2D g) {
         g.setColor(new Color(0, 200, 255));
         g.setFont(new Font("Monospaced", Font.BOLD, 13));
         g.drawString("[ ARENA 3D RAG - RADAR TELEMETRICO ]", OFFSET_X, 22);
@@ -125,7 +125,7 @@ public class HeatMap extends JPanel {
         g.drawString("HP: " + hpAtual + "/250", OFFSET_X + 4, 43);
     }
 
-    private void desenharGrelha(Graphics2D g) {
+    private void DrawGrid(Graphics2D g) {
         g.setColor(new Color(30, 30, 30));
         for (int col = 0; col < LARGURA_GRELHA; col++) {
             for (int linha = 0; linha < ALTURA_GRELHA; linha++) {
