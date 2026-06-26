@@ -32,13 +32,13 @@ public class Arena {
     public JsonObject registar() throws Exception {
         JsonObject corpo = new JsonObject();
         corpo.addProperty("nome_robo", nomeRobo);
-        corpo.addProperty("sala", codigoSala);
-        return enviarPost("/registar", corpo);  // was /register
+        corpo.addProperty("room", codigoSala);      // was "sala"
+        return enviarPost("/registar", corpo);
     }
 
     public JsonObject percecionar() throws Exception {
         HttpRequest pedido = HttpRequest.newBuilder()
-                .uri(URI.create(servidorBase + "/percecionar?nome_robo=" + nomeRobo + "&sala=" + codigoSala))
+                .uri(URI.create(servidorBase + "/percecionar?nome_robo=" + nomeRobo + "&room=" + codigoSala))  // was &sala=
                 .timeout(Duration.ofSeconds(10))
                 .GET()
                 .build();
