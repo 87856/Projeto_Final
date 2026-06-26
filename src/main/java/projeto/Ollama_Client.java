@@ -73,7 +73,7 @@ public class  Ollama_Client{
         }
 
 
-        String[] chunks = textoManual.split("\n\n+");
+        String[] chunks = textoManual.split("\\n");
 
         System.out.println("[OllamaClient] A vetorizar " + chunks.length + " chunks do manual...");
 
