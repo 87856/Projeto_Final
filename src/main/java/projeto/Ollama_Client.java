@@ -17,7 +17,7 @@ public class  Ollama_Client{
 
     private static final String URL_OLLAMA = "http://localhost:11434";
     private static final String MODELO_EMBEDDINGS = "nomic-embed-text";
-    private static final String MODELO_LLM = "qwen2.5-coder:0.5b-instruct-q4_K_M";
+    private static final String MODELO_LLM = "llama3.2:3b";
 
     private final HttpClient httpClient;
 
