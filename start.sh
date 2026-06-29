@@ -37,6 +37,7 @@ err()  { printf "${R}[ERRO]${Z} %s\n" "$*"; }
 DO_BUILD=1; DO_OLLAMA=1; FORCE_PULL=0
 MODELS=("${DEFAULT_MODELS[@]}")
 BOT_MODE=""
+ANTI_BACKTRACK=0
 PASSTHROUGH=()
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -73,6 +74,7 @@ while [ $# -gt 0 ]; do
         *)
           BOT_MODE="$1" ;;
       esac ;;
+    --no-backtrack) ANTI_BACKTRACK=1 ;;
     -h|--help)
       cat <<'HELP'
 
@@ -82,6 +84,9 @@ USAGE
 OPTIONS
   --mode <name>     Set the bot's behaviour mode (default: opportunist).
                     Use "--mode list" to see all available modes.
+  --no-backtrack    Penalise the last 5 visited cells in exploration scoring
+                    so the bot prefers unvisited space over its own trail.
+                    Combinable with any mode (e.g. --mode explorer --no-backtrack).
   --no-build        Skip "mvn clean package"; use existing jar.
   --no-ollama       Skip Ollama checks/start (forces heuristic loop).
   --pull            Force re-pull of all Ollama models.
@@ -199,4 +204,6 @@ fi
 # ---- run --------------------------------------------------------------------
 info "A iniciar o Agente Explorador..."
 echo
-java ${BOT_MODE:+-Dbot.mode="$BOT_MODE"} -jar "$JAR" "${PASSTHROUGH[@]}"
+java ${BOT_MODE:+-Dbot.mode="$BOT_MODE"} \
+     ${ANTI_BACKTRACK:+-Dbot.antiBacktrack=true} \
+     -jar "$JAR" "${PASSTHROUGH[@]}"

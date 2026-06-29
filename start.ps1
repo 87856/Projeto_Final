@@ -142,10 +142,32 @@ if ($LASTEXITCODE -ne 0) {
 }
 Write-Host "[OK] Compilacao bem-sucedida." -ForegroundColor Green
 
+# ---- args -------------------------------------------------------------------
+$BotMode       = ""
+$AntiBacktrack = $false
+foreach ($arg in $args) {
+    if ($arg -eq "--no-backtrack") { $AntiBacktrack = $true }
+    elseif ($arg -like "--mode") { <# handled below — positional #> }
+}
+# Simple positional parse: --mode <value>
+for ($i = 0; $i -lt $args.Count; $i++) {
+    if ($args[$i] -eq "--mode" -and ($i + 1) -lt $args.Count) {
+        $BotMode = $args[$i + 1]
+        $i++
+    }
+}
+
 # Run
 Write-Host ""
 Write-Host "[INFO] A iniciar o Agente Explorador..." -ForegroundColor Cyan
+if ($BotMode)       { Write-Host "[INFO] Modo: $BotMode" -ForegroundColor Cyan }
+if ($AntiBacktrack) { Write-Host "[INFO] Anti-backtrack: ON" -ForegroundColor Cyan }
 Write-Host ""
-java -jar target\agente-explorador-1.0-SNAPSHOT.jar
+
+$jvmArgs = @()
+if ($BotMode)       { $jvmArgs += "-Dbot.mode=$BotMode" }
+if ($AntiBacktrack) { $jvmArgs += "-Dbot.antiBacktrack=true" }
+
+& java @jvmArgs -jar target\agente-explorador-1.0-SNAPSHOT.jar
 
 Read-Host "Prima Enter para sair"
