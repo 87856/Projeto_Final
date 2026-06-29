@@ -1,11 +1,19 @@
-# Arena 3D RAG - Agent Launcher
+# Arena 3D RAG - Agent Launcher (Windows)
+# Skill-equivalent of start.sh for Linux devs.
 # Run with: .\start.ps1
+#
+# Both launchers must stay in sync — they pull the same Ollama models and
+# keep the resident model count capped so fast+planner fit in 6 GB VRAM.
 
 $Host.UI.RawUI.WindowTitle = "Arena Agent - Launcher"
 Write-Host "============================================" -ForegroundColor Green
-Write-Host "  ARENA 3D RAG - Agent Launcher" -ForegroundColor Green
+Write-Host "  ARENA 3D RAG - Agent Launcher (Windows)" -ForegroundColor Green
 Write-Host "============================================" -ForegroundColor Green
 Write-Host ""
+
+# Keep fast + planner resident together (6 GB VRAM is enough for 1b + 3b Q4).
+# Mirrors `export OLLAMA_MAX_LOADED_MODELS=2` in start.sh.
+$env:OLLAMA_MAX_LOADED_MODELS = "2"
 
 # Check Java
 try {
@@ -92,19 +100,34 @@ try {
     }
 }
 
-# Check models
+# Per-tag model checks (exact match). `ollama list` rows look like
+#   nomic-embed-text:latest    0a109f…   274 MB   …
+#   llama3.2:1b                bafb0…    1.3 GB   …
+# We extract the FIRST whitespace token of each line as the installed tag,
+# then `-contains` against the explicit tag list. No regex wildcards, no
+# tag-stripping (stripping would mistakenly accept `llama3.2:latest` and skip
+# pulling `llama3.2:1b`, which is the wrong default — `llama3.2` is 8B).
+# Mirrors start.sh's per-model loop.
 Write-Host ""
 Write-Host "[INFO] A verificar modelos Ollama..." -ForegroundColor Cyan
-$models = ollama list 2>&1
-if ($models -notmatch "nomic-embed-text") {
-    Write-Host "[AVISO] Modelo 'nomic-embed-text' nao encontrado. A descarregar..." -ForegroundColor Yellow
-    ollama pull nomic-embed-text
+$modelsRaw = ollama list 2>&1
+$modelTags = @()
+foreach ($line in ($modelsRaw -split "`r?`n")) {
+    $trim = $line.Trim()
+    if ($trim -eq "") { continue }
+    $tok = ($trim -split "\s+")[0]
+    if ($tok -match "^[A-Za-z0-9][A-Za-z0-9_.:\-/]*$") { $modelTags += $tok }
 }
-if ($models -notmatch "llama3.2") {
-    Write-Host "[AVISO] Modelo 'llama3.2:3b' nao encontrado. A descarregar..." -ForegroundColor Yellow
-    ollama pull llama3.2:3b
+# Explicit tags — never pull the bare `llama3.2` family (8B), only 1b and 3b.
+# Use the full tag Ollama reports in `ollama list` so the comparison is exact.
+$needed = @("nomic-embed-text:latest", "qwen2.5:1.5b", "qwen2.5:7b")
+foreach ($m in $needed) {
+    if (-not ($modelTags -contains $m)) {
+        Write-Host "[AVISO] Modelo '$m' em falta. A descarregar..." -ForegroundColor Yellow
+        & ollama pull $m
+    }
 }
-Write-Host "[OK] Modelos verificados." -ForegroundColor Green
+Write-Host "[OK] Modelos verificados (OLLAMA_MAX_LOADED_MODELS=$env:OLLAMA_MAX_LOADED_MODELS)." -ForegroundColor Green
 
 # Build
 Write-Host ""

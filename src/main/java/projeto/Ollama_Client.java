@@ -13,11 +13,13 @@ import java.util.ArrayList;
 import java.util.List;
 
 
-public class  Ollama_Client{
+public class Ollama_Client {
 
-    private static final String URL_OLLAMA = "http://localhost:11434";
-    private static final String MODELO_EMBEDDINGS = "nomic-embed-text";
-    private static final String MODELO_LLM = "llama3.2:3b";
+    public  static final String URL_OLLAMA          = "http://localhost:11434";
+    public  static final String MODELO_EMBEDDINGS   = "nomic-embed-text";
+    public  static final String MODELO_LLM          = "qwen2.5:7b";  // chest RAG key extractor
+    public  static final String MODELO_FAST         = "qwen2.5:1.5b"; // fast tactical (tier 1)
+    public  static final String MODELO_PLANNER      = "qwen2.5:7b";  // strategy planner (tier 2)
 
     private final HttpClient httpClient;
 
@@ -124,6 +126,62 @@ public class  Ollama_Client{
     }
 
     /**
+     * Generic JSON-mode generation. Sends a single non-streamed request.
+     *
+     * <p>When {@code asJson} is true the request includes {@code "format": {}}
+     * which Ollama interprets as "respond with valid JSON". The chest-RAG path
+     * <b>must</b> pass {@code false} because its prompt asks for a single bare
+     * keyword — with {@code format:{}} enforced the model often wraps the
+     * answer in JSON like {@code {"answer":"KEY"}} and the regex post-processing
+     * would extract the JSON key instead of the value, breaking the pipeline.
+     *
+     * @param model     local Ollama model tag (e.g. "llama3.2:1b")
+     * @param prompt    full prompt (system + user + assistant header)
+     * @param temperature  low = deterministic; ~0.1 is a sane default for structured output
+     * @param numPredict   upper bound on generated tokens
+     * @param asJson   true => request {@code "format":{}} (forces JSON output);
+     *                 false => no format flag (raw text output)
+     * @return raw text from the model (already trimmed), or null on failure
+     */
+    public String generateJson(String model, String prompt, double temperature,
+                               int numPredict, boolean asJson) {
+        try {
+            JsonObject opcoes = new JsonObject();
+            opcoes.addProperty("temperature", temperature);
+            opcoes.addProperty("num_predict", numPredict);
+
+            JsonObject corpo = new JsonObject();
+            corpo.addProperty("model", model);
+            corpo.addProperty("prompt", prompt);
+            corpo.addProperty("stream", false);
+            if (asJson) corpo.add("format", new JsonObject()); // {} => "any JSON"
+            corpo.add("options", opcoes);
+
+            HttpRequest pedido = HttpRequest.newBuilder()
+                    .uri(URI.create(URL_OLLAMA + "/api/generate"))
+                    .timeout(Duration.ofSeconds(60))
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(corpo.toString()))
+                    .build();
+
+            HttpResponse<String> resposta = httpClient.send(pedido, HttpResponse.BodyHandlers.ofString());
+
+            if (resposta.statusCode() != 200) {
+                System.err.println("[OllamaClient] Erro LLM (" + model + "): HTTP " + resposta.statusCode());
+                return null;
+            }
+
+            JsonObject json = JsonParser.parseString(resposta.body()).getAsJsonObject();
+            if (!json.has("response")) return null;
+            return json.get("response").getAsString().trim();
+
+        } catch (Exception e) {
+            System.err.println("[OllamaClient] Exceção em generateJson(" + model + "): " + e.getMessage());
+            return null;
+        }
+    }
+
+    /**
      * Extrai a chave de desbloqueio usando o LLM com Prompt Engineering (ChatML).
      * Usa temperatura 0.0 para outputs determinísticos.
      *
@@ -147,33 +205,13 @@ public class  Ollama_Client{
                     "<|im_end|>\n" +
                     "<|im_start|>assistant\n";
 
-            JsonObject opcoes = new JsonObject();
-            opcoes.addProperty("temperature", 0.0);
-            opcoes.addProperty("num_predict", 20);
-
-            JsonObject corpo = new JsonObject();
-            corpo.addProperty("model", MODELO_LLM);
-            corpo.addProperty("prompt", promptChatML);
-            corpo.addProperty("stream", false);
-            corpo.add("options", opcoes);
-
-            HttpRequest pedido = HttpRequest.newBuilder()
-                    .uri(URI.create(URL_OLLAMA + "/api/generate"))
-                    .timeout(Duration.ofSeconds(60))
-                    .header("Content-Type", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(corpo.toString()))
-                    .build();
-
-            HttpResponse<String> resposta = httpClient.send(pedido, HttpResponse.BodyHandlers.ofString());
-
-            if (resposta.statusCode() != 200) {
-                System.err.println("[OllamaClient] Erro LLM: HTTP " + resposta.statusCode());
-                return null;
-            }
-
-            JsonObject json = JsonParser.parseString(resposta.body()).getAsJsonObject();
-            String chaveRaw = json.get("response").getAsString().trim();
-
+            // Reutiliza generateJson para manter o caminho de erro centralizado.
+            // Como o RAG prompt NÃO exige JSON estruturado (espera uma palavra
+            // crua), passamos asJson=false para não forçar o modo JSON do Ollama
+            // — caso contrário o modelo embrulha a resposta e o regex apanha
+            // apenas a chave JSON, nunca o valor.
+            String chaveRaw = generateJson(MODELO_LLM, promptChatML, 0.0, 20, false);
+            if (chaveRaw == null) return null;
 
             String chave = chaveRaw.split("\\s+")[0].toUpperCase().replaceAll("[^A-Z0-9\\-]", "");
 
