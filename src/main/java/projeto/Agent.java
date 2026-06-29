@@ -43,6 +43,13 @@ public class Agent {
     // Mode configuration (set once at construction from -Dbot.mode system property).
     private final BotConfig config;
 
+    // Anti-backtrack: penalise the last RECENCY_DEPTH cells in exploration scoring.
+    // Enabled via -Dbot.antiBacktrack=true (start.sh --no-backtrack flag).
+    private static final int RECENCY_DEPTH = 5;
+    private final boolean antiBacktrack =
+            "true".equalsIgnoreCase(System.getProperty("bot.antiBacktrack", "false"));
+    private final ArrayDeque<String> recentPath = new ArrayDeque<>(RECENCY_DEPTH + 1);
+
     private int xAtual = 0;
     private int yAtual = 0;
     private int hpAtual = 200;
@@ -56,7 +63,8 @@ public class Agent {
         this.ollamaClient = new Ollama_Client();
         this.painel      = new HeatMap(nomeRobo, modoLLM);
         this.config      = BotConfig.fromMode(System.getProperty("bot.mode", "opportunist"));
-        System.out.println("[Agente] Modo: " + config.name);
+        System.out.println("[Agente] Modo: " + config.name
+                + (antiBacktrack ? " | anti-backtrack ON (depth=" + RECENCY_DEPTH + ")" : ""));
     }
 
 
@@ -646,6 +654,8 @@ public class Agent {
             if (paredes.contains(chave)) continue;
 
             int calor = historicoVisitas.getOrDefault(chave, 0);
+            // Penalise recently-visited cells to avoid immediate backtracking.
+            if (antiBacktrack && recentPath.contains(chave)) calor += 25;
             if (calor < menorCalor) {
                 menorCalor = calor;
                 melhorAcao = acoes[i];
@@ -686,6 +696,10 @@ public class Agent {
     private void registarVisita(int x, int y) {
         String chave = x + "," + y;
         historicoVisitas.merge(chave, 1, Integer::sum);
+        if (antiBacktrack) {
+            recentPath.addFirst(chave);
+            while (recentPath.size() > RECENCY_DEPTH) recentPath.removeLast();
+        }
     }
 
 
