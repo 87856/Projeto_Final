@@ -446,7 +446,7 @@ public class HeatMap extends JPanel {
             String.format(" Rivals:    %d classified%n", rivalsClassified) +
             "\n─── nomic-embed-text (RAG) ─\n" +
             String.format(" Chunks:    %d in RAM%n", ragChunks) +
-            String.format(" Status:    %-17s%n", ragChunks > 0 ? "ready" : "not loaded") + "\n";
+            String.format(" Status:    %s%n", ragChunks > 0 ? "** READY **" : "loading...") + "\n";
 
         SwingUtilities.invokeLater(() -> telPanel.setText(txt));
     }

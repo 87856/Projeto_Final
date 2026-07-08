@@ -196,10 +196,13 @@ public class Agent {
         }
 
 
-        // After registar()
         try {
             JsonObject respostaRegisto = arenaClient.registar();
-            System.out.println("[Agente] Registo resposta completa: " + respostaRegisto);
+            System.out.println("[Agente] Registo resposta: " + respostaRegisto);
+            if (respostaRegisto == null) {
+                System.err.println("[Agente] ERRO: registo recusado pelo servidor (resposta nula). A encerrar.");
+                return;
+            }
         } catch (Exception e) {
             System.err.println("[Agente] Falha no registo: " + e.getMessage());
             e.printStackTrace();
