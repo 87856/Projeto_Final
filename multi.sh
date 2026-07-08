@@ -1,63 +1,69 @@
 #!/usr/bin/env bash
 # multi.sh — launch several bots into the same arena room for bot-vs-bot testing.
 #
-# Usage:
-#   bash multi.sh --room SALA123 [--modes berserker,coward,explorer] [--no-gui] [--no-build]
+# Interactive when run with no --modes flag.
+# Non-interactive: bash multi.sh --room SALA --modes berserker,coward,explorer
 #
-# Defaults: 3 bots (opportunist, berserker, coward), each with GUI.
 # Ctrl+C kills all child bots cleanly.
-#
-# Source code is compiled; opponents only ever receive the jar.
 
 set -u
 
 JAR="target/agente-explorador-1.0-SNAPSHOT.jar"
-DEFAULT_MODES=("opportunist" "berserker" "coward")
-BOT_NAMES=("Alpha" "Beta" "Gamma" "Delta" "Epsilon" "Zeta" "Eta" "Theta")
+DEFAULT_NAMES=("Alpha" "Beta" "Gamma" "Delta" "Epsilon" "Zeta" "Eta" "Theta")
+STAGGER_MS=1500   # ms between bot registrations (avoids arena race)
 
 ROOM=""
-MODES=()
 NO_GUI=0
 DO_BUILD=1
+NONINTERACTIVE=0
 
+# Per-bot arrays (populated either interactively or from --modes flag)
+BOT_NAMES=()
+BOT_MODES=()
+BOT_BACKTRACK=()   # 0 or 1 per bot
+
+# ---- colours ----------------------------------------------------------------
+if [ -t 1 ]; then
+  G="\033[32m"; Y="\033[33m"; C="\033[36m"; W="\033[97m"; Z="\033[0m"
+else
+  G=""; Y=""; C=""; W=""; Z=""
+fi
+
+# ---- arg parsing ------------------------------------------------------------
 while [ $# -gt 0 ]; do
   case "$1" in
     --room)     shift; ROOM="$1" ;;
-    --modes)    shift; IFS=',' read -r -a MODES <<< "$1" ;;
     --no-gui)   NO_GUI=1 ;;
     --no-build) DO_BUILD=0 ;;
+    --modes)
+      shift
+      NONINTERACTIVE=1
+      IFS=',' read -r -a _MODES <<< "$1"
+      for i in "${!_MODES[@]}"; do
+        BOT_NAMES+=("${DEFAULT_NAMES[$i]:-Bot$i}")
+        BOT_MODES+=("${_MODES[$i]}")
+        BOT_BACKTRACK+=(0)
+      done ;;
     -h|--help)
       cat <<'HELP'
 
 USAGE
-  bash multi.sh --room <code> [OPTIONS]
+  bash multi.sh [--room <code>] [OPTIONS]
+
+  Run with no --modes to get an interactive prompt for each bot.
 
 OPTIONS
-  --room <code>       Arena room code (required)
-  --modes m1,m2,...   Comma-separated mode list (default: opportunist,berserker,coward)
-  --no-gui            Suppress HeatMap windows for all bots (faster, less VRAM)
+  --room <code>       Arena room code (reads saved room if omitted)
+  --modes m1,m2,...   Non-interactive: comma-separated mode list
+  --no-gui            Suppress HeatMap windows for all bots
   --no-build          Skip Maven build; reuse existing jar
   -h, --help          Show this help
 
-EXAMPLES
-  # 3 bots, with radar windows
-  # room defaults to last used (saved by start.sh)
-  bash multi.sh --modes opportunist,berserker,coward
+INTERACTIVE EXAMPLE
+  bash multi.sh
 
-  # 3 bots, explicit room
-  bash multi.sh --room TEST99 --modes opportunist,berserker,coward
-
-  # 5 bots headless (mode explorer + 4 rivals)
-  bash multi.sh --room TEST99 --modes explorer,berserker,coward,farmer,ghost --no-gui
-
-  # only build once, then reuse for rapid re-runs
-  bash multi.sh --room TEST99 --no-build
-
-NOTES
-  - Each bot gets a unique name (Alpha, Beta, Gamma, ...).
-  - Ollama inference is shared; bots don't block each other (async threads).
-  - The jar is compiled code — opponents cannot read your source.
-  - Use a private room code so other students don't join your test session.
+NON-INTERACTIVE EXAMPLE
+  bash multi.sh --room TEST99 --modes berserker,coward,explorer --no-gui
 
 HELP
       exit 0 ;;
@@ -66,26 +72,68 @@ HELP
   shift
 done
 
+cd "$(dirname "$0")" || { echo "[multi] cannot cd to script dir"; exit 1; }
+
+# ---- resolve room -----------------------------------------------------------
 if [ -z "$ROOM" ]; then
   PROPS="$HOME/.arena_agent.properties"
   if [ -f "$PROPS" ]; then
     ROOM=$(grep '^sala=' "$PROPS" | cut -d'=' -f2- | tr -d '[:space:]')
   fi
   if [ -z "$ROOM" ]; then
-    echo "[multi] ERROR: --room not given and no saved room in ~/.arena_agent.properties."
-    echo "  Run start.sh once manually, or pass --room TEST123."
-    exit 1
+    printf "${Y}Room code:${Z} "; read -r ROOM
+    [ -z "$ROOM" ] && { echo "[multi] No room given. Aborting."; exit 1; }
+  else
+    printf "${C}[multi] Saved room: ${W}%s${Z}\n" "$ROOM"
   fi
-  echo "[multi] Using saved room: $ROOM"
 fi
 
-[ ${#MODES[@]} -eq 0 ] && MODES=("${DEFAULT_MODES[@]}")
+# ---- interactive bot config -------------------------------------------------
+if [ "$NONINTERACTIVE" -eq 0 ]; then
+  printf "\n${G}=== Bot Configuration ===${Z}\n"
+  printf "${C}Room: ${W}%s${Z}\n\n" "$ROOM"
 
-cd "$(dirname "$0")" || { echo "[multi] cannot cd to script dir"; exit 1; }
+  printf "${Y}How many bots?${Z} [3]: "; read -r N
+  N="${N:-3}"
+  if ! [[ "$N" =~ ^[1-9][0-9]*$ ]]; then
+    echo "[multi] Invalid number. Aborting."; exit 1
+  fi
 
-# Optional build — mirrors start.sh's /tmp workaround for NTFS mounts
+  for i in $(seq 1 "$N"); do
+    idx=$((i-1))
+    DEF_NAME="${DEFAULT_NAMES[$idx]:-Bot$idx}"
+    printf "\n${G}── Bot %d ───────────────────────${Z}\n" "$i"
+
+    printf "  ${Y}Name${Z} [%s]: " "$DEF_NAME"; read -r bname
+    BOT_NAMES+=("${bname:-$DEF_NAME}")
+
+    printf "  ${Y}Mode${Z} [opportunist]: "; read -r bmode
+    BOT_MODES+=("${bmode:-opportunist}")
+
+    printf "  ${Y}--no-backtrack?${Z} [y/N]: "; read -r bnb
+    [[ "$bnb" =~ ^[Yy] ]] && BOT_BACKTRACK+=(1) || BOT_BACKTRACK+=(0)
+  done
+
+  printf "\n${Y}Suppress GUI for all bots?${Z} [y/N]: "; read -r ng
+  [[ "$ng" =~ ^[Yy] ]] && NO_GUI=1
+fi
+
+# ---- summary + confirm ------------------------------------------------------
+printf "\n${G}=== Launch Summary ===${Z}\n"
+printf "  ${C}Room:${Z}  %s\n" "$ROOM"
+printf "  ${C}GUI:${Z}   %s\n" "$([ "$NO_GUI" -eq 1 ] && echo OFF || echo ON)"
+printf "  ${C}Bots:${Z}  %d\n\n" "${#BOT_MODES[@]}"
+for i in "${!BOT_MODES[@]}"; do
+  nb_str="$([ "${BOT_BACKTRACK[$i]}" -eq 1 ] && echo "+no-backtrack" || echo "")"
+  printf "  ${W}%d.${Z} %-12s  mode=%-14s %s\n" \
+    "$((i+1))" "${BOT_NAMES[$i]}" "${BOT_MODES[$i]}" "$nb_str"
+done
+printf "\n${Y}Launch? [Y/n]:${Z} "; read -r confirm
+[[ "$confirm" =~ ^[Nn] ]] && { echo "[multi] Aborted."; exit 0; }
+
+# ---- build ------------------------------------------------------------------
 if [ "$DO_BUILD" -eq 1 ]; then
-  echo "[multi] Building (via /tmp workaround for NTFS)..."
+  printf "\n${C}[multi] Building (via /tmp — contorna restricoes NTFS)...${Z}\n"
   TMPBUILD=$(mktemp -d)
   cp -r src "$TMPBUILD/" && cp pom.xml "$TMPBUILD/"
   if ! mvn -f "$TMPBUILD/pom.xml" clean package -q; then
@@ -96,7 +144,7 @@ if [ "$DO_BUILD" -eq 1 ]; then
   mkdir -p target
   cp "$TMPBUILD/target/"*.jar target/
   rm -rf "$TMPBUILD"
-  echo "[multi] Build OK."
+  printf "${G}[multi] Build OK.${Z}\n"
 fi
 
 if [ ! -f "$JAR" ]; then
@@ -104,43 +152,47 @@ if [ ! -f "$JAR" ]; then
   exit 1
 fi
 
-# Kill all child processes on Ctrl+C
+# ---- kill all on Ctrl+C -----------------------------------------------------
 PIDS=()
 cleanup() {
-  echo ""
-  echo "[multi] Stopping all bots..."
-  for pid in "${PIDS[@]}"; do
-    kill "$pid" 2>/dev/null
-  done
+  printf "\n${Y}[multi] Stopping all bots...${Z}\n"
+  for pid in "${PIDS[@]}"; do kill "$pid" 2>/dev/null; done
   wait 2>/dev/null
-  echo "[multi] Done."
+  printf "${G}[multi] Done.${Z}\n"
   exit 0
 }
 trap cleanup INT TERM
 
 export OLLAMA_MAX_LOADED_MODELS="${OLLAMA_MAX_LOADED_MODELS:-2}"
 
-echo "[multi] Room: $ROOM | Bots: ${#MODES[@]} | GUI: $([ $NO_GUI -eq 1 ] && echo OFF || echo ON)"
-echo ""
+# ---- launch -----------------------------------------------------------------
+printf "\n${G}[multi] Launching ${#BOT_MODES[@]} bots into room ${ROOM}...${Z}\n\n"
 
-for i in "${!MODES[@]}"; do
-  NAME="${BOT_NAMES[$i]:-Bot$i}"
-  MODE="${MODES[$i]}"
+for i in "${!BOT_MODES[@]}"; do
+  NAME="${BOT_NAMES[$i]}"
+  MODE="${BOT_MODES[$i]}"
+  NB="${BOT_BACKTRACK[$i]}"
 
   CMD=(java
     "-Dbot.name=$NAME"
     "-Dbot.room=$ROOM"
     "-Dbot.mode=$MODE"
   )
+  [ "$NB" -eq 1 ]   && CMD+=("-Dbot.antiBacktrack=true")
   [ "$NO_GUI" -eq 1 ] && CMD+=("-Dbot.noGui=true")
   CMD+=("-jar" "$JAR")
 
-  echo "[multi] Starting $NAME ($MODE)..."
+  printf "${C}[multi] Starting${Z} ${W}%s${Z} (mode=${W}%s${Z}%s)...\n" \
+    "$NAME" "$MODE" "$([ "$NB" -eq 1 ] && echo ", no-backtrack" || echo "")"
+
   "${CMD[@]}" &
   PIDS+=($!)
-  sleep 0.3   # stagger slightly so arena registrations don't collide
+
+  # Stagger registrations so the arena doesn't reject simultaneous connections.
+  if [ "$((i+1))" -lt "${#BOT_MODES[@]}" ]; then
+    sleep "$(echo "$STAGGER_MS" | awk '{printf "%.1f", $1/1000}')"
+  fi
 done
 
-echo ""
-echo "[multi] ${#PIDS[@]} bots running. Press Ctrl+C to stop all."
+printf "\n${G}[multi] ${#PIDS[@]} bots running. Ctrl+C to stop all.${Z}\n"
 wait
