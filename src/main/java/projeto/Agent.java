@@ -30,9 +30,12 @@ public class Agent {
     private final HeatMap painel;
 
 
-    private final Map<String, Integer> historicoVisitas = new HashMap<>();
-    private final Set<String>          cofresFalhados   = new HashSet<>();
-    private final Queue<String>        filaAcoesPlaneadas = new LinkedList<>();
+    private final Map<String, Integer> historicoVisitas      = new HashMap<>();
+    private final Set<String>          cofresFalhados        = new HashSet<>();
+    private final Queue<String>        filaAcoesPlaneadas    = new LinkedList<>();
+    private final Map<String, Integer> chestNavAttempts      = new HashMap<>();
+    private static final int MAX_CHEST_NAV_ATTEMPTS = 8;
+    private int cofresAbertos = 0;
     private List<Vetores>    baseDocumentos   = new ArrayList<>();
 
     // ---- Two-tier LLM brain (null unless modoLLM && ollama up) -----------
@@ -494,6 +497,7 @@ public class Agent {
             if (resultado != null) {
                 String status = resultado.has("status") ? resultado.get("status").getAsString() : "";
                 if ("sucesso".equals(status)) {
+                    cofresAbertos++;
                     estadoRAG = "✓ Cofre aberto! +" + 100 + "HP";
                     System.out.println("[Agente] COFRE ABERTO! +100 HP");
 
@@ -663,6 +667,14 @@ public class Agent {
 
                 if (cofresFalhados.contains(chaveCofre)) continue;
 
+                // Give up on unreachable chests after MAX_CHEST_NAV_ATTEMPTS ticks targeting them.
+                int attempts = chestNavAttempts.getOrDefault(chaveCofre, 0);
+                if (attempts > MAX_CHEST_NAV_ATTEMPTS) {
+                    cofresFalhados.add(chaveCofre);
+                    System.err.println("[Agente] Cofre " + chaveCofre + " inacessível após " + attempts + " tentativas. A ignorar.");
+                    continue;
+                }
+
                 int dist = Math.abs(cx - xAtual) + Math.abs(cy - yAtual);
                 if (dist < melhorDist) {
                     melhorDist = dist;
@@ -671,7 +683,11 @@ public class Agent {
                 }
             }
 
-            if (alvoX != -1) return moverEmDirecao(alvoX, alvoY);
+            if (alvoX != -1) {
+                String key = alvoX + "," + alvoY;
+                chestNavAttempts.merge(key, 1, Integer::sum);
+                return moverEmDirecao(alvoX, alvoY);
+            }
         } catch (Exception e) {
             System.err.println("[Agente] Erro ao navegar para cofre: " + e.getMessage());
         }
@@ -813,13 +829,21 @@ public class Agent {
         // — RAG —
         int ragChunks = baseDocumentos != null ? baseDocumentos.size() : 0;
 
+        // — Chests —
+        int cofresTotal = 0;
+        if (percepcao != null && percepcao.has("cofres_no_mundo")) {
+            try { cofresTotal = percepcao.get("cofres_no_mundo").getAsJsonArray().size(); }
+            catch (Exception ignored) {}
+        }
+
         long[] s = timingStats();
         painel.atualizarTelemetria(
                 config.name, antiBacktrack,
                 modoLLM && !config.llmDisabled, config.runPlanner,
                 tickCounter, s[0], s[1], s[2], s[3],
                 goalStr, fastReason, fastAction, fastTick,
-                plannerTick, rivalsClassified, ragChunks);
+                plannerTick, rivalsClassified, ragChunks,
+                cofresTotal, cofresAbertos, cofresFalhados.size(), estadoRAG);
     }
 
     private long[] timingStats() {

@@ -42,6 +42,13 @@ while [ $# -gt 0 ]; do
       if [[ "$_port" =~ ^[0-9]+$ ]]; then BOT_SERVER="http://localhost:$_port"
       else BOT_SERVER="http://localhost:8080"; fi ;;
     --server)   shift; BOT_SERVER="$1" ;;
+    --all-modes)
+      NONINTERACTIVE=1
+      for m in opportunist berserker dominator bully coward ghost survivor passive farmer treasure hoarder rich assassin scavenger explorer no-llm; do
+        BOT_NAMES+=("$m")
+        BOT_MODES+=("$m")
+        BOT_BACKTRACK+=(0)
+      done ;;
     --modes)
       shift
       NONINTERACTIVE=1
@@ -61,6 +68,7 @@ USAGE
 
 OPTIONS
   --room <code>       Arena room code (reads saved room if omitted)
+  --all-modes         Launch all 16 modes; bot name = mode name
   --modes m1,m2,...   Non-interactive: comma-separated mode list
   --no-gui            Suppress HeatMap windows for all bots
   --no-build          Skip Maven build; reuse existing jar
