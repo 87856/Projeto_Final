@@ -51,9 +51,9 @@ while [ $# -gt 0 ]; do
     --models)    shift; IFS=',' read -r -a MODELS <<< "${1:-}" ;;
     --local)
       shift 2>/dev/null || true
-      _port="${1:-8080}"
-      if [[ "$_port" =~ ^[0-9]+$ ]]; then BOT_SERVER="http://localhost:$_port"; else
-        BOT_SERVER="http://localhost:8080"; PASSTHROUGH+=("$_port"); fi ;;
+      _port="${1:-}"
+      if [[ "$_port" =~ ^[0-9]+$ ]]; then BOT_SERVER="http://localhost:$_port"; shift || true
+      else BOT_SERVER="http://localhost:8080"; [ -n "$_port" ] && PASSTHROUGH+=("$_port"); fi ;;
     --server)    shift; BOT_SERVER="$1" ;;
     --mode)
       shift

@@ -38,8 +38,9 @@ while [ $# -gt 0 ]; do
     --no-build) DO_BUILD=0 ;;
     --local)
       shift 2>/dev/null || true
-      _port="${1:-8080}"
-      [[ "$_port" =~ ^[0-9]+$ ]] && BOT_SERVER="http://localhost:$_port" || BOT_SERVER="http://localhost:8080" ;;
+      _port="${1:-}"
+      if [[ "$_port" =~ ^[0-9]+$ ]]; then BOT_SERVER="http://localhost:$_port"
+      else BOT_SERVER="http://localhost:8080"; fi ;;
     --server)   shift; BOT_SERVER="$1" ;;
     --modes)
       shift
@@ -157,7 +158,7 @@ if [ "$NONINTERACTIVE" -eq 0 ]; then
     printf "  ${W}3${Z}  Custom URL\n"
     printf "${Y}Server [1]:${Z} "; read -r _sv
     case "${_sv:-1}" in
-      2) BOT_SERVER="http://localhost:8080" ;;
+      2) printf "Port [8080]: "; read -r _port; BOT_SERVER="http://localhost:${_port:-8080}" ;;
       3) printf "URL: "; read -r BOT_SERVER ;;
       *) BOT_SERVER="" ;;  # empty = default prod
     esac
