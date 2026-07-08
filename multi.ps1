@@ -6,7 +6,7 @@
 # Ctrl+C stops all bots.
 
 param(
-    [Parameter(Mandatory=$true)][string]$Room,
+    [string]$Room = "",
     [string]$Modes = "opportunist,berserker,coward",
     [switch]$NoGui,
     [switch]$NoBuild
@@ -19,6 +19,20 @@ $Jar = "target\agente-explorador-1.0-SNAPSHOT.jar"
 Set-Location $PSScriptRoot
 
 $env:OLLAMA_MAX_LOADED_MODELS = "2"
+
+if (-not $Room) {
+    $propsPath = Join-Path $env:USERPROFILE ".arena_agent.properties"
+    if (Test-Path $propsPath) {
+        $line = Get-Content $propsPath | Where-Object { $_ -match '^sala=' } | Select-Object -First 1
+        if ($line) { $Room = ($line -split '=', 2)[1].Trim() }
+    }
+    if (-not $Room) {
+        Write-Host "[multi] ERROR: -Room not given and no saved room in ~/.arena_agent.properties." -ForegroundColor Red
+        Write-Host "  Run start.ps1 once manually, or pass -Room TEST123." -ForegroundColor Yellow
+        exit 1
+    }
+    Write-Host "[multi] Using saved room: $Room" -ForegroundColor Cyan
+}
 
 if (-not $NoBuild) {
     Write-Host "[multi] Building..." -ForegroundColor Cyan

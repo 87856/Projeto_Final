@@ -41,6 +41,10 @@ OPTIONS
 
 EXAMPLES
   # 3 bots, with radar windows
+  # room defaults to last used (saved by start.sh)
+  bash multi.sh --modes opportunist,berserker,coward
+
+  # 3 bots, explicit room
   bash multi.sh --room TEST99 --modes opportunist,berserker,coward
 
   # 5 bots headless (mode explorer + 4 rivals)
@@ -63,9 +67,16 @@ HELP
 done
 
 if [ -z "$ROOM" ]; then
-  echo "[multi] ERROR: --room is required."
-  echo "  Usage: bash multi.sh --room TEST123 [--modes mode1,mode2,...]"
-  exit 1
+  PROPS="$HOME/.arena_agent.properties"
+  if [ -f "$PROPS" ]; then
+    ROOM=$(grep '^sala=' "$PROPS" | cut -d'=' -f2- | tr -d '[:space:]')
+  fi
+  if [ -z "$ROOM" ]; then
+    echo "[multi] ERROR: --room not given and no saved room in ~/.arena_agent.properties."
+    echo "  Run start.sh once manually, or pass --room TEST123."
+    exit 1
+  fi
+  echo "[multi] Using saved room: $ROOM"
 fi
 
 [ ${#MODES[@]} -eq 0 ] && MODES=("${DEFAULT_MODES[@]}")
