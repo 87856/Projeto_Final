@@ -213,10 +213,14 @@ public class Agent {
             inicializarCamadasLLM();
         }
 
+        // Load + vectorise the manual in the background so the game loop starts
+        // immediately after registration. The arena drops bots that take too long
+        // to send their first perceive. RAG is gracefully unavailable until ready.
         if (modoLLM && !config.llmDisabled) {
-            carregarManual();
+            Thread manualThread = new Thread(this::carregarManual, "manual-loader");
+            manualThread.setDaemon(true);
+            manualThread.start();
         }
-
 
         System.out.println("[Agente] A entrar no ciclo principal...");
         while (true) {
