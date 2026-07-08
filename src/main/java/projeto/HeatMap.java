@@ -206,7 +206,7 @@ public class HeatMap extends JPanel {
             if (coords == null) continue;
 
             int col = coords[0] - xAtual + LARGURA_GRELHA / 2;
-            int linha = coords[1] - yAtual + ALTURA_GRELHA / 2;
+            int linha = yAtual - coords[1] + ALTURA_GRELHA / 2; // flip Y: arena NORTE=y+1
 
             if (col < 0 || col >= LARGURA_GRELHA || linha < 0 || linha >= ALTURA_GRELHA) continue;
 
@@ -237,7 +237,7 @@ public class HeatMap extends JPanel {
             for (JsonElement elem : recursos) {
                 JsonObject rec = elem.getAsJsonObject();
                 int col = rec.get("x").getAsInt() - xAtual + LARGURA_GRELHA / 2;
-                int linha = rec.get("y").getAsInt() - yAtual + ALTURA_GRELHA / 2;
+                int linha = yAtual - rec.get("y").getAsInt() + ALTURA_GRELHA / 2;
                 if (InsideGrid(col, linha)) {
                     int px = OFFSET_X + col * TAMANHO_CELULA + 4;
                     int py = OFFSET_Y + linha * TAMANHO_CELULA + 4;
@@ -258,7 +258,7 @@ public class HeatMap extends JPanel {
             for (JsonElement elem : cofres) {
                 JsonObject cofre = elem.getAsJsonObject();
                 int col = cofre.get("x").getAsInt() - xAtual + LARGURA_GRELHA / 2;
-                int linha = cofre.get("y").getAsInt() - yAtual + ALTURA_GRELHA / 2;
+                int linha = yAtual - cofre.get("y").getAsInt() + ALTURA_GRELHA / 2;
                 if (InsideGrid(col, linha)) {
                     int px = OFFSET_X + col * TAMANHO_CELULA + 2;
                     int py = OFFSET_Y + linha * TAMANHO_CELULA + 2;
@@ -290,7 +290,7 @@ public class HeatMap extends JPanel {
                 int wx = robo.get("x").getAsInt();
                 int wy = robo.get("y").getAsInt();
                 int col = wx - xAtual + LARGURA_GRELHA / 2;
-                int linha = wy - yAtual + ALTURA_GRELHA / 2;
+                int linha = yAtual - wy + ALTURA_GRELHA / 2;
                 if (InsideGrid(col, linha)) {
                     int px = OFFSET_X + col * TAMANHO_CELULA + 3;
                     int py = OFFSET_Y + linha * TAMANHO_CELULA + 3;
@@ -377,7 +377,7 @@ public class HeatMap extends JPanel {
 
     private void DrawCelule(Graphics2D g, int mundoX, int mundoY, int padding) {
         int col = mundoX - xAtual + LARGURA_GRELHA / 2;
-        int linha = mundoY - yAtual + ALTURA_GRELHA / 2;
+        int linha = yAtual - mundoY + ALTURA_GRELHA / 2;
         if (InsideGrid(col, linha)) {
             g.fillRect(
                     OFFSET_X + col * TAMANHO_CELULA + padding,
@@ -405,25 +405,44 @@ public class HeatMap extends JPanel {
             String mode, boolean antiBacktrack,
             boolean llmAtivo, boolean plannerAtivo,
             long tick, long avgMs, long minMs, long maxMs, long p99Ms,
-            String lastReason, String goal) {
+            String goal,
+            String fastReason, String fastAction, long fastTick,
+            long plannerTick, int rivalsClassified, int ragChunks) {
 
         String txt =
             "─── CONFIG ─────────────────\n" +
-            String.format(" Mode:       %-16s%n", mode) +
-            String.format(" Backtrack:  %-16s%n", antiBacktrack ? "penalised (3x3)" : "free") +
-            String.format(" LLM:        %-16s%n", llmAtivo ? "ON" : "OFF (heuristic)") +
-            String.format(" Planner:    %-16s%n", plannerAtivo ? "ON" : "OFF") +
+            String.format(" Mode:      %-17s%n", mode) +
+            String.format(" Backtrack: %-17s%n", antiBacktrack ? "penalised (3x3)" : "free") +
             "\n─── TIMING (decidirAcao) ───\n" +
-            String.format(" Tick #:     %-16d%n", tick) +
-            String.format(" Avg:        %d ms%n", avgMs) +
-            String.format(" Min:        %d ms%n", minMs) +
-            String.format(" Max:        %d ms%n", maxMs) +
-            String.format(" p99 (1%%):   %d ms%n", p99Ms) +
-            "\n─── LLM STATE ──────────────\n" +
-            String.format(" Goal:       %-16s%n", goal) +
-            "\n Fast reason:\n" +
-            "  " + (lastReason.isEmpty() ? "(no suggestion yet)" : lastReason) + "\n";
+            String.format(" Tick #:    %-17d%n", tick) +
+            String.format(" Avg:       %d ms%n",   avgMs) +
+            String.format(" Min:       %d ms%n",   minMs) +
+            String.format(" Max:       %d ms%n",   maxMs) +
+            String.format(" p99 (1%%):  %d ms%n",  p99Ms) +
+            "\n─── qwen2.5:1.5b (fast) ───\n" +
+            String.format(" Status:    %-17s%n", llmAtivo ? "ON" : "OFF") +
+            String.format(" Last tick: %-17s%n", fastTick < 0 ? "—" : "#" + fastTick) +
+            String.format(" Action:    %-17s%n", fastAction) +
+            " Reason:\n" +
+            wrapText(fastReason, 25) +
+            "\n─── qwen2.5:7b (planner) ──\n" +
+            String.format(" Status:    %-17s%n", plannerAtivo && llmAtivo ? "ON" : "OFF") +
+            String.format(" Goal:      %-17s%n", goal) +
+            String.format(" Last tick: %-17s%n", plannerTick <= 0 ? "—" : "#" + plannerTick) +
+            String.format(" Rivals:    %d classified%n", rivalsClassified) +
+            "\n─── nomic-embed-text (RAG) ─\n" +
+            String.format(" Chunks:    %d in RAM%n", ragChunks) +
+            String.format(" Status:    %-17s%n", ragChunks > 0 ? "ready" : "not loaded") + "\n";
 
         SwingUtilities.invokeLater(() -> telPanel.setText(txt));
+    }
+
+    private static String wrapText(String s, int width) {
+        if (s == null || s.isEmpty()) return "  (none)\n";
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < s.length(); i += width) {
+            sb.append("  ").append(s, i, Math.min(i + width, s.length())).append("\n");
+        }
+        return sb.toString();
     }
 }

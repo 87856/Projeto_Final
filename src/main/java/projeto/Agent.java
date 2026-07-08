@@ -53,7 +53,7 @@ public class Agent {
 
     // Anti-backtrack: penalise the last RECENCY_DEPTH cells in exploration scoring.
     // Enabled via -Dbot.antiBacktrack=true (start.sh --no-backtrack flag).
-    private static final int RECENCY_DEPTH = 8;
+    private static final int RECENCY_DEPTH = 50; // must cover full map height so trail persists end-to-end
     private final boolean antiBacktrack =
             "true".equalsIgnoreCase(System.getProperty("bot.antiBacktrack", "false"));
     private final ArrayDeque<String> recentPath = new ArrayDeque<>(RECENCY_DEPTH + 1);
@@ -668,8 +668,10 @@ public class Agent {
         }
 
 
-        String melhorAcao = acoes[new Random().nextInt(acoes.length)];
+        // Collect candidates with equal minimum heat, then pick randomly among them.
+        // Random tie-breaking prevents the deterministic lawnmower pattern.
         int menorCalor = Integer.MAX_VALUE;
+        List<String> melhores = new ArrayList<>(4);
 
         for (int i = 0; i < candidatos.length; i++) {
             int cx = candidatos[i][0];
@@ -679,13 +681,19 @@ public class Agent {
             if (paredes.contains(chave)) continue;
 
             int calor = historicoVisitas.getOrDefault(chave, 0);
-            // Penalise cells within the 3x3 neighbourhood of any recent position.
             if (antiBacktrack && isNearRecentPath(cx, cy)) calor += 25;
             if (calor < menorCalor) {
                 menorCalor = calor;
-                melhorAcao = acoes[i];
+                melhores.clear();
+                melhores.add(acoes[i]);
+            } else if (calor == menorCalor) {
+                melhores.add(acoes[i]);
             }
         }
+
+        String melhorAcao = melhores.isEmpty()
+                ? acoes[new Random().nextInt(acoes.length)]                // all walls — random
+                : melhores.get(new Random().nextInt(melhores.size()));     // random tie-break
 
         return melhorAcao;
     }
@@ -745,17 +753,36 @@ public class Agent {
         painel.atualizar(percepcao, historicoVisitas, hpAtual, xAtual, yAtual,
                 ultimaAcao, estadoRAG, goalStr, rivals);
 
-        String lastReason = "";
+        // — fast tactical —
+        String fastReason = "(no suggestion yet)";
+        String fastAction = "—";
+        long   fastTick   = -1;
         if (fastTactical != null) {
             FastTacticalClient.TacticalSuggestion sug = fastTactical.getSuggestion();
-            if (sug != null && !sug.reason.isBlank()) lastReason = sug.reason;
+            if (sug != null) {
+                if (!sug.reason.isBlank()) fastReason = sug.reason;
+                fastAction = sug.action;
+                fastTick   = sug.tick;
+            }
         }
+        // — planner —
+        long plannerTick      = -1;
+        int  rivalsClassified = 0;
+        if (strategyState != null) {
+            StrategyState.Strategy st = strategyState.get();
+            plannerTick      = st.stampTick;
+            rivalsClassified = st.rivals != null ? st.rivals.size() : 0;
+        }
+        // — RAG —
+        int ragChunks = baseDocumentos != null ? baseDocumentos.size() : 0;
+
         long[] s = timingStats();
         painel.atualizarTelemetria(
                 config.name, antiBacktrack,
                 modoLLM && !config.llmDisabled, config.runPlanner,
                 tickCounter, s[0], s[1], s[2], s[3],
-                lastReason, goalStr);
+                goalStr, fastReason, fastAction, fastTick,
+                plannerTick, rivalsClassified, ragChunks);
     }
 
     private long[] timingStats() {
