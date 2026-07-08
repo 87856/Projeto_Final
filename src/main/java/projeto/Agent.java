@@ -8,6 +8,7 @@ import javax.swing.*;
 import java.io.*;
 import java.nio.file.*;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
 
 
@@ -34,8 +35,16 @@ public class Agent {
     private final Set<String>          cofresFalhados        = new HashSet<>();
     private final Queue<String>        filaAcoesPlaneadas    = new LinkedList<>();
     private final Map<String, Integer> chestNavAttempts      = new HashMap<>();
-    private static final int MAX_CHEST_NAV_ATTEMPTS = 8;
+    private static final int MAX_CHEST_NAV_ATTEMPTS = 25;
     private int cofresAbertos = 0;
+
+    // Async chest unlock: background thread computes key; main loop submits when ready.
+    private static final class ChestKeyResult {
+        final String key, chunkText;
+        ChestKeyResult(String key, String chunkText) { this.key = key; this.chunkText = chunkText; }
+    }
+    private final ConcurrentHashMap<String, ChestKeyResult> readyChestKeys = new ConcurrentHashMap<>();
+    private final Set<String> computingChests = ConcurrentHashMap.newKeySet();
     private List<Vetores>    baseDocumentos   = new ArrayList<>();
 
     // ---- Two-tier LLM brain (null unless modoLLM && ollama up) -----------
@@ -351,12 +360,41 @@ public class Agent {
         // 1. Planned action queue (always highest priority).
         if (!filaAcoesPlaneadas.isEmpty()) return filaAcoesPlaneadas.poll();
 
-        // 2. Chest enigma unlock — always attempted regardless of mode
-        //    (if the bot is standing on a chest, open it).
+        // 2. Chest enigma unlock — async: background thread finds key; main loop submits it.
         String enigma = arenaClient.extrairEnigmaCofre(percepcao);
         String chaveCofreAtual = xAtual + "," + yAtual;
         if (enigma != null && !cofresFalhados.contains(chaveCofreAtual)) {
-            return tentarDesbloquearCofre(enigma, chaveCofreAtual);
+            ChestKeyResult ready = readyChestKeys.remove(chaveCofreAtual);
+            if (ready != null) {
+                return submeterChaveCofre(ready, chaveCofreAtual);
+            }
+            if (!modoLLM || baseDocumentos.isEmpty()) {
+                cofresFalhados.add(chaveCofreAtual);
+            } else if (!computingChests.contains(chaveCofreAtual)) {
+                computingChests.add(chaveCofreAtual);
+                final String enigmaFinal = enigma;
+                estadoRAG = "A pesquisar chave (async)...";
+                Thread t = new Thread(() -> {
+                    try {
+                        Vetores chunk = ollamaClient.encontrarChunkMaisRelevante(enigmaFinal, baseDocumentos);
+                        if (chunk == null) { cofresFalhados.add(chaveCofreAtual); return; }
+                        String key = ollamaClient.extrairChaveRAG(enigmaFinal, chunk.getTexto());
+                        if (key != null) readyChestKeys.put(chaveCofreAtual, new ChestKeyResult(key, chunk.getTexto()));
+                        else cofresFalhados.add(chaveCofreAtual);
+                    } catch (Exception e) {
+                        System.err.println("[Agente] Erro async cofre: " + e.getMessage());
+                        cofresFalhados.add(chaveCofreAtual);
+                    } finally {
+                        computingChests.remove(chaveCofreAtual);
+                    }
+                }, "chest-key-" + chaveCofreAtual);
+                t.setDaemon(true);
+                t.start();
+            } else {
+                estadoRAG = "A computar chave...";
+            }
+            // Explore while key is being computed; navegarParaCofre will bring us back.
+            return explorarPorCalor(percepcao);
         }
 
         // 3. Fast tactical LLM override — only for combat-capable modes.
@@ -462,45 +500,17 @@ public class Agent {
         }
     }
 
-    private String tentarDesbloquearCofre(String enigma, String chave) {
-        System.out.println("[Agente] Cofre detetado! Enigma: " + enigma);
-
-        if (!modoLLM || baseDocumentos.isEmpty()) {
-            System.err.println("[Agente] LLM desativado ou manual não carregado. A ignorar cofre.");
-            cofresFalhados.add(chave);
-            return explorarPorCalor(null);
-        }
-
+    private String submeterChaveCofre(ChestKeyResult result, String chave) {
         try {
-            estadoRAG = "A pesquisar manual...";
-            Vetores chunkRelevante = ollamaClient.encontrarChunkMaisRelevante(enigma, baseDocumentos);
-
-            if (chunkRelevante == null) {
-                estadoRAG = "Chunk não encontrado";
-                cofresFalhados.add(chave);
-                return explorarPorCalor(null);
-            }
-
-            estadoRAG = "A extrair chave com LLM...";
-            String chaveExtraida = ollamaClient.extrairChaveRAG(enigma, chunkRelevante.getTexto());
-
-            if (chaveExtraida == null) {
-                estadoRAG = "LLM não gerou chave";
-                cofresFalhados.add(chave);
-                return explorarPorCalor(null);
-            }
-
-
-            estadoRAG = "A submeter chave: " + chaveExtraida;
-            JsonObject resultado = arenaClient.desbloquearCofre(chaveExtraida, chunkRelevante.getTexto(), chaveExtraida);
-
-            if (resultado != null) {
-                String status = resultado.has("status") ? resultado.get("status").getAsString() : "";
+            estadoRAG = "A submeter chave: " + result.key;
+            System.out.println("[Agente] Cofre " + chave + " — a submeter chave: " + result.key);
+            JsonObject resposta = arenaClient.desbloquearCofre(result.key, result.chunkText, result.key);
+            if (resposta != null) {
+                String status = resposta.has("status") ? resposta.get("status").getAsString() : "";
                 if ("sucesso".equals(status)) {
                     cofresAbertos++;
-                    estadoRAG = "✓ Cofre aberto! +" + 100 + "HP";
+                    estadoRAG = "✓ Cofre aberto! +100HP";
                     System.out.println("[Agente] COFRE ABERTO! +100 HP");
-
                     filaAcoesPlaneadas.add("MOVER_NORTE");
                     filaAcoesPlaneadas.add("MOVER_NORTE");
                 } else {
@@ -509,13 +519,11 @@ public class Agent {
                     cofresFalhados.add(chave);
                 }
             }
-
         } catch (Exception e) {
-            estadoRAG = "Erro RAG: " + e.getMessage();
-            System.err.println("[Agente] Erro no pipeline RAG: " + e.getMessage());
+            estadoRAG = "Erro ao submeter: " + e.getMessage();
+            System.err.println("[Agente] Erro ao submeter chave: " + e.getMessage());
             cofresFalhados.add(chave);
         }
-
         return explorarPorCalor(null);
     }
 
@@ -720,6 +728,19 @@ public class Agent {
             } catch (Exception ignored) {}
         }
 
+        // For skipCombat / fleeFromAny modes, treat rival positions as walls so the
+        // bot never accidentally walks into an opponent during exploration.
+        if (config.skipCombat || config.fleeFromAny) {
+            if (percepcao != null && percepcao.has("outros_robots")) {
+                try {
+                    for (JsonElement e : percepcao.get("outros_robots").getAsJsonArray()) {
+                        JsonObject r = e.getAsJsonObject();
+                        paredes.add(r.get("x").getAsInt() + "," + r.get("y").getAsInt());
+                    }
+                } catch (Exception ignored) {}
+            }
+        }
+
 
         // Collect candidates with equal minimum heat, then pick randomly among them.
         // Random tie-breaking prevents the deterministic lawnmower pattern.
@@ -821,6 +842,7 @@ public class Agent {
         // — planner —
         long plannerTick      = -1;
         int  rivalsClassified = 0;
+        int  rivalsTracked    = rivalTracker != null ? rivalTracker.snapshotForPlanner().size() : 0;
         if (strategyState != null) {
             StrategyState.Strategy st = strategyState.get();
             plannerTick      = st.stampTick;
@@ -842,7 +864,7 @@ public class Agent {
                 modoLLM && !config.llmDisabled, config.runPlanner,
                 tickCounter, s[0], s[1], s[2], s[3],
                 goalStr, fastReason, fastAction, fastTick,
-                plannerTick, rivalsClassified, ragChunks,
+                plannerTick, rivalsTracked, rivalsClassified, ragChunks,
                 cofresTotal, cofresAbertos, cofresFalhados.size(), estadoRAG);
     }
 

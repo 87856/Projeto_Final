@@ -418,7 +418,7 @@ public class HeatMap extends JPanel {
             long tick, long avgMs, long minMs, long maxMs, long p99Ms,
             String goal,
             String fastReason, String fastAction, long fastTick,
-            long plannerTick, int rivalsClassified, int ragChunks,
+            long plannerTick, int rivalsTracked, int rivalsClassified, int ragChunks,
             int cofresTotal, int cofresAbertos, int cofresFalhados, String ragStatus) {
         if (!guiEnabled) return;
 
@@ -450,7 +450,8 @@ public class HeatMap extends JPanel {
             String.format(" Status:    %-17s%n", plannerAtivo && llmAtivo ? "ON" : "OFF") +
             String.format(" Goal:      %-17s%n", goal) +
             String.format(" Last tick: %-17s%n", plannerTick <= 0 ? "—" : "#" + plannerTick) +
-            String.format(" Rivals:    %d classified%n", rivalsClassified) +
+            String.format(" Tracked:   %-17d%n", rivalsTracked) +
+            String.format(" Classified:%-17d%n", rivalsClassified) +
             "\n─── nomic-embed-text (RAG) ─\n" +
             String.format(" Chunks:    %d in RAM%n", ragChunks) +
             String.format(" Status:    %s%n", ragChunks > 0 ? "** READY **" : "loading...") + "\n";
