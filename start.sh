@@ -193,12 +193,19 @@ if [ "$DO_OLLAMA" -eq 1 ] && command -v ollama >/dev/null 2>&1; then
 fi
 
 # ---- build ------------------------------------------------------------------
+# Build in /tmp to avoid NTFS mount restrictions on mvn clean (can't delete target/).
 if [ "$DO_BUILD" -eq 1 ]; then
-  info "A compilar com Maven..."
-  if ! "$MVN" clean package -q; then
+  info "A compilar com Maven (via /tmp — contorna restricoes NTFS)..."
+  TMPBUILD=$(mktemp -d)
+  cp -r src "$TMPBUILD/" && cp pom.xml "$TMPBUILD/"
+  if ! "$MVN" -f "$TMPBUILD/pom.xml" clean package -q; then
     err "Falha na compilacao."
+    rm -rf "$TMPBUILD"
     exit 1
   fi
+  mkdir -p target
+  cp "$TMPBUILD/target/"*.jar target/
+  rm -rf "$TMPBUILD"
   ok "Compilacao bem-sucedida."
 fi
 

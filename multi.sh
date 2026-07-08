@@ -83,13 +83,19 @@ fi
 
 cd "$(dirname "$0")" || { echo "[multi] cannot cd to script dir"; exit 1; }
 
-# Optional build
+# Optional build — mirrors start.sh's /tmp workaround for NTFS mounts
 if [ "$DO_BUILD" -eq 1 ]; then
-  echo "[multi] Building..."
-  if ! mvn clean package -q 2>&1; then
+  echo "[multi] Building (via /tmp workaround for NTFS)..."
+  TMPBUILD=$(mktemp -d)
+  cp -r src "$TMPBUILD/" && cp pom.xml "$TMPBUILD/"
+  if ! mvn -f "$TMPBUILD/pom.xml" clean package -q; then
     echo "[multi] Build failed."
+    rm -rf "$TMPBUILD"
     exit 1
   fi
+  mkdir -p target
+  cp "$TMPBUILD/target/"*.jar target/
+  rm -rf "$TMPBUILD"
   echo "[multi] Build OK."
 fi
 
