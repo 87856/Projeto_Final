@@ -49,9 +49,16 @@ public class HeatMap extends JPanel {
     private JFrame    janela;
     private JLabel    labelStatus;
     private JTextArea telPanel;
+    private boolean   guiEnabled;
 
 
     public HeatMap(String nomeRobo, boolean modoLLM) {
+        this(nomeRobo, modoLLM, true);
+    }
+
+    public HeatMap(String nomeRobo, boolean modoLLM, boolean guiEnabled) {
+        this.guiEnabled = guiEnabled;
+        if (!guiEnabled) return; // headless: skip all Swing construction
         setPreferredSize(new Dimension(
                 LARGURA_GRELHA * TAMANHO_CELULA + OFFSET_X * 2,
                 ALTURA_GRELHA * TAMANHO_CELULA + OFFSET_Y + 100
@@ -104,6 +111,7 @@ public class HeatMap extends JPanel {
      */
     public void atualizar(JsonObject percepcao, Map<String, Integer> historico,
                           int hp, int x, int y, String acao, String estadoRag) {
+        if (!guiEnabled) return;
         atualizar(percepcao, historico, hp, x, y, acao, estadoRag, "—", Collections.emptyList());
     }
 
@@ -117,6 +125,7 @@ public class HeatMap extends JPanel {
     public void atualizar(JsonObject percepcao, Map<String, Integer> historico,
                           int hp, int x, int y, String acao, String estadoRag,
                           String goal, List<RivalProfile> rivalProfiles) {
+        if (!guiEnabled) return;
         this.ultimaPercepcao = percepcao;
         this.historicoVisitas = historico;
         this.hpAtual = hp;
@@ -408,6 +417,7 @@ public class HeatMap extends JPanel {
             String goal,
             String fastReason, String fastAction, long fastTick,
             long plannerTick, int rivalsClassified, int ragChunks) {
+        if (!guiEnabled) return;
 
         String txt =
             "─── CONFIG ─────────────────\n" +

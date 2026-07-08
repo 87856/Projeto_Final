@@ -66,10 +66,14 @@ public class Agent {
     private String estadoRAG  = "Manual não carregado";
 
     public Agent(String nomeRobo, String codigoSala, boolean modoLLM) {
+        this(nomeRobo, codigoSala, modoLLM, true);
+    }
+
+    public Agent(String nomeRobo, String codigoSala, boolean modoLLM, boolean gui) {
         this.modoLLM     = modoLLM;
         this.arenaClient = new Arena(SERVIDOR_ARENA, nomeRobo, codigoSala);
         this.ollamaClient = new Ollama_Client();
-        this.painel      = new HeatMap(nomeRobo, modoLLM);
+        this.painel      = new HeatMap(nomeRobo, modoLLM, gui);
         this.config      = BotConfig.fromMode(System.getProperty("bot.mode", "opportunist"));
         System.out.println("[Agente] Modo: " + config.name
                 + (antiBacktrack ? " | anti-backtrack ON (depth=" + RECENCY_DEPTH + ")" : ""));
@@ -98,6 +102,18 @@ public class Agent {
             }
             System.out.println("[Smoke] PASS");
             System.exit(0);
+        }
+
+        // Headless / scripted mode: --name and --room skip the dialog entirely.
+        // Used by multi.sh to launch N bots from a script without popups.
+        String cliName = System.getProperty("bot.name");
+        String cliRoom = System.getProperty("bot.room");
+        boolean noGui  = "true".equalsIgnoreCase(System.getProperty("bot.noGui", "false"));
+        if (cliName != null && cliRoom != null) {
+            System.out.printf("[Agente] Modo scripted: nome=%s sala=%s gui=%s%n",
+                    cliName, cliRoom, !noGui);
+            new Agent(cliName, cliRoom, true, !noGui).iniciar();
+            return;
         }
 
         // Load last-used name + room from ~/.arena_agent.properties.
