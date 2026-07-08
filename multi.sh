@@ -148,13 +148,28 @@ if [ "$NONINTERACTIVE" -eq 0 ]; then
 
   printf "\n${Y}Suppress GUI for all bots?${Z} [y/N]: "; read -r ng
   [[ "$ng" =~ ^[Yy] ]] && NO_GUI=1
+
+  # Server selection (only prompt if not already set via --local/--server flag)
+  if [ -z "$BOT_SERVER" ]; then
+    printf "\n${G}=== Server ===${Z}\n"
+    printf "  ${W}1${Z}  Production  (https://arena.pmonteiro.ovh)\n"
+    printf "  ${W}2${Z}  Localhost   (http://localhost:8080)\n"
+    printf "  ${W}3${Z}  Custom URL\n"
+    printf "${Y}Server [1]:${Z} "; read -r _sv
+    case "${_sv:-1}" in
+      2) BOT_SERVER="http://localhost:8080" ;;
+      3) printf "URL: "; read -r BOT_SERVER ;;
+      *) BOT_SERVER="" ;;  # empty = default prod
+    esac
+  fi
 fi
 
 # ---- summary + confirm ------------------------------------------------------
 printf "\n${G}=== Launch Summary ===${Z}\n"
-printf "  ${C}Room:${Z}  %s\n" "$ROOM"
-printf "  ${C}GUI:${Z}   %s\n" "$([ "$NO_GUI" -eq 1 ] && echo OFF || echo ON)"
-printf "  ${C}Bots:${Z}  %d\n\n" "${#BOT_MODES[@]}"
+printf "  ${C}Room:${Z}   %s\n" "$ROOM"
+printf "  ${C}Server:${Z} %s\n" "${BOT_SERVER:-https://arena.pmonteiro.ovh (prod)}"
+printf "  ${C}GUI:${Z}    %s\n" "$([ "$NO_GUI" -eq 1 ] && echo OFF || echo ON)"
+printf "  ${C}Bots:${Z}   %d\n\n" "${#BOT_MODES[@]}"
 for i in "${!BOT_MODES[@]}"; do
   nb_str="$([ "${BOT_BACKTRACK[$i]}" -eq 1 ] && echo "+no-backtrack" || echo "")"
   printf "  ${W}%d.${Z} %-12s  mode=%-14s %s\n" \
