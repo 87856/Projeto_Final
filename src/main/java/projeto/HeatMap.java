@@ -8,6 +8,9 @@ import javax.swing.*;
 import java.awt.*;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 
@@ -19,6 +22,12 @@ public class HeatMap extends JPanel {
     private static final int OFFSET_Y = 60;
     private static final int LARGURA_GRELHA = 30;
     private static final int ALTURA_GRELHA = 25;
+
+    /** Per-rival colour ramp (tier-2 overlay). */
+    private static final Color COLOR_RIVAL_AGGRESSIVE = new Color(255, 40, 40);
+    private static final Color COLOR_RIVAL_DEFENSIVE  = new Color(50, 110, 220);
+    private static final Color COLOR_RIVAL_PASSIVE    = new Color(160, 160, 160);
+    private static final Color COLOR_RIVAL_UNKNOWN    = Color.RED;
 
 
     private volatile JsonObject ultimaPercepcao = null;
@@ -32,9 +41,14 @@ public class HeatMap extends JPanel {
     private volatile String ultimaAcao = "—";
     private volatile String estadoRAG = "Aguardando...";
 
+    // NEW — tier-2 overlays
+    private volatile String goal = "—";
+    private volatile List<RivalProfile> rivalProfiles = Collections.emptyList();
 
-    private JFrame janela;
-    private JLabel labelStatus;
+
+    private JFrame    janela;
+    private JLabel    labelStatus;
+    private JTextArea telPanel;
 
 
     public HeatMap(String nomeRobo, boolean modoLLM) {
@@ -54,22 +68,55 @@ public class HeatMap extends JPanel {
             }
         });
 
-        labelStatus = new JLabel("HP: 200 | Pos: (0,0) | Ação: — | RAG: Aguardando");
+        labelStatus = new JLabel("HP: 200 | Pos: (0,0) | Ação: — | RAG: Aguardando | Goal: —");
         labelStatus.setForeground(Color.CYAN);
         labelStatus.setFont(new Font("Monospaced", Font.PLAIN, 12));
         labelStatus.setBorder(BorderFactory.createEmptyBorder(4, 8, 4, 8));
 
+        telPanel = new JTextArea("Aguardando dados...");
+        telPanel.setBackground(new Color(8, 10, 18));
+        telPanel.setForeground(new Color(160, 210, 255));
+        telPanel.setFont(new Font("Monospaced", Font.PLAIN, 11));
+        telPanel.setEditable(false);
+        telPanel.setBorder(BorderFactory.createEmptyBorder(6, 8, 6, 8));
+        JScrollPane telScroll = new JScrollPane(telPanel,
+                JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED,
+                JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+        telScroll.setBorder(BorderFactory.createMatteBorder(0, 1, 0, 0, new Color(40, 60, 90)));
+        telScroll.setPreferredSize(new Dimension(230, 0));
+        telScroll.getViewport().setBackground(new Color(8, 10, 18));
+
         janela.setLayout(new BorderLayout());
         janela.add(this, BorderLayout.CENTER);
         janela.add(labelStatus, BorderLayout.SOUTH);
+        janela.add(telScroll, BorderLayout.EAST);
         janela.pack();
         janela.setLocationRelativeTo(null);
         janela.setVisible(true);
     }
 
 
+    /**
+     * Legacy signature kept alive — invoked by the early
+     * {@code painel.atualizar(null, ...)} call in {@link Agent#iniciar}
+     * right after {@code arenaClient.registar()} (before any rival state exists).
+     * Delegates to the rich overload with neutral defaults.
+     */
     public void atualizar(JsonObject percepcao, Map<String, Integer> historico,
                           int hp, int x, int y, String acao, String estadoRag) {
+        atualizar(percepcao, historico, hp, x, y, acao, estadoRag, "—", Collections.emptyList());
+    }
+
+    /**
+     * Rich overload: status bar shows the current strategy goal, and rival
+     * squares are coloured by their planner-derived classification.
+     *
+     * @param goal          current planner goal (e.g. "HUNT", "OPPORTUNIST")
+     * @param rivalProfiles current snapshot of {@link RivalProfile}s (may be empty)
+     */
+    public void atualizar(JsonObject percepcao, Map<String, Integer> historico,
+                          int hp, int x, int y, String acao, String estadoRag,
+                          String goal, List<RivalProfile> rivalProfiles) {
         this.ultimaPercepcao = percepcao;
         this.historicoVisitas = historico;
         this.hpAtual = hp;
@@ -77,6 +124,9 @@ public class HeatMap extends JPanel {
         this.yAtual = y;
         this.ultimaAcao = acao;
         this.estadoRAG = estadoRag;
+        this.goal = (goal != null) ? goal : "—";
+        this.rivalProfiles = (rivalProfiles != null)
+                ? rivalProfiles : Collections.emptyList();
 
 
         if (historico != null && !historico.isEmpty()) {
@@ -84,7 +134,9 @@ public class HeatMap extends JPanel {
         }
 
 
-        labelStatus.setText(String.format("HP: %d | Pos: (%d,%d) | Ação: %s | RAG: %s", hp, x, y, acao, estadoRag));
+        labelStatus.setText(String.format(
+                "HP: %d | Pos: (%d,%d) | Ação: %s | RAG: %s | Goal: %s",
+                hp, x, y, acao, estadoRag, this.goal));
 
 
         SwingUtilities.invokeLater(this::repaint);
@@ -123,6 +175,13 @@ public class HeatMap extends JPanel {
         g.setColor(Color.WHITE);
         g.setFont(new Font("Monospaced", Font.BOLD, 11));
         g.drawString("HP: " + hpAtual + "/250", OFFSET_X + 4, 43);
+
+        // Goal chip (tier-2)
+        g.setColor(new Color(20, 20, 50));
+        g.fillRect(OFFSET_X + larguraBarra + 12, 30, 110, 14);
+        g.setColor(Color.YELLOW);
+        g.drawString("Goal: " + (goal != null ? goal : "—"),
+                OFFSET_X + larguraBarra + 16, 43);
     }
 
     private void DrawGrid(Graphics2D g) {
@@ -138,8 +197,11 @@ public class HeatMap extends JPanel {
 
     private void DrawHeatMap(Graphics2D g) {
         if (historicoVisitas == null) return;
+        // Snapshot to local: the main loop can swap the volatile reference
+        // mid-iteration otherwise.
+        Map<String, Integer> localHistorico = historicoVisitas;
 
-        for (Map.Entry<String, Integer> entrada : historicoVisitas.entrySet()) {
+        for (Map.Entry<String, Integer> entrada : localHistorico.entrySet()) {
             int[] coords = ParseCoords(entrada.getKey());
             if (coords == null) continue;
 
@@ -212,24 +274,60 @@ public class HeatMap extends JPanel {
 
     private void DrawOtherAgents(Graphics2D g) {
         if (ultimaPercepcao == null) return;
+        // Snapshot the volatile references to local before iterating. The main
+        // loop publishes a new TickSnapshot and a new rivals list every tick;
+        // without the local capture, mid-iteration repaints could pop a
+        // ConcurrentModificationException.
+        List<RivalProfile> localProfiles = this.rivalProfiles;
+        JsonObject localPercepcao = this.ultimaPercepcao;
+
+        Map<String, RivalProfile> byPos = profileIndexByPosition(localProfiles);
+
         try {
-            JsonArray robos = ultimaPercepcao.getAsJsonArray("outros_robots");
-            g.setColor(Color.RED);
+            JsonArray robos = localPercepcao.getAsJsonArray("outros_robots");
             for (JsonElement elem : robos) {
                 JsonObject robo = elem.getAsJsonObject();
-                int col = robo.get("x").getAsInt() - xAtual + LARGURA_GRELHA / 2;
-                int linha = robo.get("y").getAsInt() - yAtual + ALTURA_GRELHA / 2;
+                int wx = robo.get("x").getAsInt();
+                int wy = robo.get("y").getAsInt();
+                int col = wx - xAtual + LARGURA_GRELHA / 2;
+                int linha = wy - yAtual + ALTURA_GRELHA / 2;
                 if (InsideGrid(col, linha)) {
                     int px = OFFSET_X + col * TAMANHO_CELULA + 3;
                     int py = OFFSET_Y + linha * TAMANHO_CELULA + 3;
+
+                    RivalProfile pf = byPos.get(wx + "," + wy);
+                    Color c = colorForClass(pf != null ? pf.getClazz() : null);
+
+                    g.setColor(c);
                     g.fillRect(px, py, TAMANHO_CELULA - 6, TAMANHO_CELULA - 6);
                     g.setColor(Color.WHITE);
                     g.setFont(new Font("Monospaced", Font.BOLD, 8));
-                    g.drawString("RIV", px + 1, py + 12);
-                    g.setColor(Color.RED);
+                    String tag = (pf != null) ? pf.getClazz().name().substring(0, 3) : "RIV";
+                    g.drawString(tag, px + 1, py + 12);
                 }
             }
         } catch (Exception ignored) {}
+    }
+
+    /** Indexes profiles by their last-seen world position so the renderer can look them up O(1). */
+    private static Map<String, RivalProfile> profileIndexByPosition(List<RivalProfile> profiles) {
+        if (profiles == null || profiles.isEmpty()) return Collections.emptyMap();
+        Map<String, RivalProfile> m = new HashMap<>(profiles.size());
+        for (RivalProfile p : profiles) {
+            if (p.getLastX() == Integer.MIN_VALUE) continue;
+            m.put(p.getLastX() + "," + p.getLastY(), p);
+        }
+        return m;
+    }
+
+    private static Color colorForClass(RivalProfile.Classification c) {
+        if (c == null) return COLOR_RIVAL_UNKNOWN;
+        switch (c) {
+            case AGGRESSIVE: return COLOR_RIVAL_AGGRESSIVE;
+            case DEFENSIVE:  return COLOR_RIVAL_DEFENSIVE;
+            case PASSIVE:    return COLOR_RIVAL_PASSIVE;
+            default:         return COLOR_RIVAL_UNKNOWN;
+        }
     }
 
     private void DrawAgent(Graphics2D g) {
@@ -250,8 +348,8 @@ public class HeatMap extends JPanel {
         int baseY = OFFSET_Y + ALTURA_GRELHA * TAMANHO_CELULA + 10;
         g.setFont(new Font("Monospaced", Font.PLAIN, 10));
 
-        int[][] cores = {{0, 160, 255}, {180, 100, 0}, {0, 220, 80}, {255, 215, 0}, {255, 0, 0}};
-        String[] textos = {"Agente", "Parede", "Energia", "Cofre", "Rival"};
+        int[][] cores = {{0, 160, 255}, {180, 100, 0}, {0, 220, 80}, {255, 215, 0}};
+        String[] textos = {"Agente", "Parede", "Energia", "Cofre"};
 
         for (int i = 0; i < textos.length; i++) {
             int px = OFFSET_X + i * 100;
@@ -259,6 +357,19 @@ public class HeatMap extends JPanel {
             g.fillRect(px, baseY, 12, 12);
             g.setColor(Color.LIGHT_GRAY);
             g.drawString(textos[i], px + 16, baseY + 11);
+        }
+
+        // Second line: rival classification palette (only when tier-2 is on)
+        int y2 = baseY + 18;
+        g.setFont(new Font("Monospaced", Font.PLAIN, 9));
+        Color[] rc = {COLOR_RIVAL_AGGRESSIVE, COLOR_RIVAL_DEFENSIVE, COLOR_RIVAL_PASSIVE, COLOR_RIVAL_UNKNOWN};
+        String[] rl = {"AGR", "DEF", "PAS", "?"};
+        for (int i = 0; i < rc.length; i++) {
+            int px = OFFSET_X + i * 100;
+            g.setColor(rc[i]);
+            g.fillRect(px, y2, 12, 12);
+            g.setColor(Color.LIGHT_GRAY);
+            g.drawString(rl[i] + " Rival", px + 16, y2 + 11);
         }
     }
 
@@ -288,5 +399,31 @@ public class HeatMap extends JPanel {
         } catch (Exception e) {
             return null;
         }
+    }
+
+    public void atualizarTelemetria(
+            String mode, boolean antiBacktrack,
+            boolean llmAtivo, boolean plannerAtivo,
+            long tick, long avgMs, long minMs, long maxMs, long p99Ms,
+            String lastReason, String goal) {
+
+        String txt =
+            "─── CONFIG ─────────────────\n" +
+            String.format(" Mode:       %-16s%n", mode) +
+            String.format(" Backtrack:  %-16s%n", antiBacktrack ? "penalised (3x3)" : "free") +
+            String.format(" LLM:        %-16s%n", llmAtivo ? "ON" : "OFF (heuristic)") +
+            String.format(" Planner:    %-16s%n", plannerAtivo ? "ON" : "OFF") +
+            "\n─── TIMING (decidirAcao) ───\n" +
+            String.format(" Tick #:     %-16d%n", tick) +
+            String.format(" Avg:        %d ms%n", avgMs) +
+            String.format(" Min:        %d ms%n", minMs) +
+            String.format(" Max:        %d ms%n", maxMs) +
+            String.format(" p99 (1%%):   %d ms%n", p99Ms) +
+            "\n─── LLM STATE ──────────────\n" +
+            String.format(" Goal:       %-16s%n", goal) +
+            "\n Fast reason:\n" +
+            "  " + (lastReason.isEmpty() ? "(no suggestion yet)" : lastReason) + "\n";
+
+        SwingUtilities.invokeLater(() -> telPanel.setText(txt));
     }
 }

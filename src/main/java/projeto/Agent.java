@@ -5,6 +5,8 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 
 import javax.swing.*;
+import java.io.*;
+import java.nio.file.*;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -42,6 +44,12 @@ public class Agent {
 
     // Mode configuration (set once at construction from -Dbot.mode system property).
     private final BotConfig config;
+
+    // Decision-time ring buffer: ms taken by decidirAcao() per tick.
+    private static final int TIMING_SAMPLES = 200;
+    private final long[] tickTimes  = new long[TIMING_SAMPLES];
+    private int tickTimeHead   = 0;
+    private int tickTimeFilled = 0;
 
     // Anti-backtrack: penalise the last RECENCY_DEPTH cells in exploration scoring.
     // Enabled via -Dbot.antiBacktrack=true (start.sh --no-backtrack flag).
@@ -92,8 +100,14 @@ public class Agent {
             System.exit(0);
         }
 
-        JTextField campoNome  = new JTextField("Alfa");
-        JTextField campoSala  = new JTextField("aluno_treino_2026");
+        // Load last-used name + room from ~/.arena_agent.properties.
+        Path propsPath = Paths.get(System.getProperty("user.home"), ".arena_agent.properties");
+        Properties lastRun = new Properties();
+        try (InputStream in = Files.newInputStream(propsPath)) { lastRun.load(in); }
+        catch (Exception ignored) {}
+
+        JTextField campoNome  = new JTextField(lastRun.getProperty("nome", "Alfa"));
+        JTextField campoSala  = new JTextField(lastRun.getProperty("sala", "aluno_treino_2026"));
         JCheckBox  checkLLM   = new JCheckBox("Modo Heurística Pura (Sem LLM)");
 
         String[] servidores   = {"Produção (arena.pmonteiro.ovh)", "Localhost (dev)"};
@@ -126,6 +140,14 @@ public class Agent {
             JOptionPane.showMessageDialog(null, "Nome e Sala são obrigatórios!", "Erro", JOptionPane.ERROR_MESSAGE);
             return;
         }
+
+        // Persist name + room for next launch.
+        try (OutputStream out = Files.newOutputStream(propsPath)) {
+            Properties save = new Properties();
+            save.setProperty("nome", nomeRobo);
+            save.setProperty("sala", codigoSala);
+            save.store(out, "Arena Agent — last run");
+        } catch (Exception ignored) {}
 
         Agent agente = new Agent(nomeRobo, codigoSala, !semLLM);
         agente.iniciar();
@@ -214,8 +236,11 @@ public class Agent {
                 publicarTickSnapshot(percepcao);
 
 
+                long t0 = System.currentTimeMillis();
                 String acaoEscolhida = decidirAcao(percepcao);
-
+                tickTimes[tickTimeHead] = System.currentTimeMillis() - t0;
+                tickTimeHead = (tickTimeHead + 1) % TIMING_SAMPLES;
+                if (tickTimeFilled < TIMING_SAMPLES) tickTimeFilled++;
 
                 executarAcao(acaoEscolhida, percepcao);
 
@@ -714,11 +739,37 @@ public class Agent {
 
 
     private void atualizarPainel(JsonObject percepcao) {
-        // Status bar shows current goal + rival classifier map.
         String goalStr = strategyState != null ? strategyState.currentGoal().name() : "—";
         List<RivalProfile> rivals = rivalTracker != null
                 ? rivalTracker.snapshotForPlanner() : Collections.emptyList();
         painel.atualizar(percepcao, historicoVisitas, hpAtual, xAtual, yAtual,
                 ultimaAcao, estadoRAG, goalStr, rivals);
+
+        String lastReason = "";
+        if (fastTactical != null) {
+            FastTacticalClient.TacticalSuggestion sug = fastTactical.getSuggestion();
+            if (sug != null && !sug.reason.isBlank()) lastReason = sug.reason;
+        }
+        long[] s = timingStats();
+        painel.atualizarTelemetria(
+                config.name, antiBacktrack,
+                modoLLM && !config.llmDisabled, config.runPlanner,
+                tickCounter, s[0], s[1], s[2], s[3],
+                lastReason, goalStr);
+    }
+
+    private long[] timingStats() {
+        if (tickTimeFilled == 0) return new long[]{0, 0, 0, 0};
+        long[] copy = Arrays.copyOf(tickTimes, tickTimeFilled);
+        Arrays.sort(copy);
+        long sum = 0;
+        for (long v : copy) sum += v;
+        int p99idx = Math.max(0, (int)(copy.length * 0.99) - 1);
+        return new long[]{
+            sum / copy.length,     // avg
+            copy[0],               // min
+            copy[copy.length - 1], // max
+            copy[p99idx]           // p99 (worst 1%)
+        };
     }
 }
