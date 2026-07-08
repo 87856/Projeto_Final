@@ -165,27 +165,58 @@ trap cleanup INT TERM
 
 export OLLAMA_MAX_LOADED_MODELS="${OLLAMA_MAX_LOADED_MODELS:-2}"
 
+# ---- logging setup ----------------------------------------------------------
+mkdir -p logs
+TIMESTAMP=$(date +%Y-%m-%d_%H-%M-%S)
+MULTI_LOG="logs/${TIMESTAMP}_multi_orchestration.log"
+{
+  echo "# multi.sh orchestration log"
+  echo "# Started: $(date)"
+  echo "# Room:    $ROOM"
+  echo "# Bots:    ${#BOT_MODES[@]}"
+  for i in "${!BOT_MODES[@]}"; do
+    echo "#   $((i+1)). ${BOT_NAMES[$i]} (${BOT_MODES[$i]})"
+  done
+  echo "# ----------------------------------------"
+} > "$MULTI_LOG"
+
 # ---- launch -----------------------------------------------------------------
 printf "\n${G}[multi] Launching ${#BOT_MODES[@]} bots into room ${ROOM}...${Z}\n\n"
+printf "${C}[multi] Orchestration log: ${W}%s${Z}\n\n" "$MULTI_LOG"
 
 for i in "${!BOT_MODES[@]}"; do
   NAME="${BOT_NAMES[$i]}"
   MODE="${BOT_MODES[$i]}"
   NB="${BOT_BACKTRACK[$i]}"
+  BOT_LOG="logs/${TIMESTAMP}_${NAME}_${MODE}.log"
+
+  # Per-bot log header
+  {
+    echo "# Bot log: $NAME"
+    echo "# Started: $(date)"
+    echo "# Room:    $ROOM"
+    echo "# Mode:    $MODE"
+    echo "# Backtrack: $NB"
+    echo "# ----------------------------------------"
+  } > "$BOT_LOG"
+  ln -sf "$(basename "$BOT_LOG")" "logs/latest_${NAME}.log" 2>/dev/null || true
 
   CMD=(java
     "-Dbot.name=$NAME"
     "-Dbot.room=$ROOM"
     "-Dbot.mode=$MODE"
   )
-  [ "$NB" -eq 1 ]   && CMD+=("-Dbot.antiBacktrack=true")
+  [ "$NB" -eq 1 ]    && CMD+=("-Dbot.antiBacktrack=true")
   [ "$NO_GUI" -eq 1 ] && CMD+=("-Dbot.noGui=true")
   CMD+=("-jar" "$JAR")
 
-  printf "${C}[multi] Starting${Z} ${W}%s${Z} (mode=${W}%s${Z}%s)...\n" \
-    "$NAME" "$MODE" "$([ "$NB" -eq 1 ] && echo ", no-backtrack" || echo "")"
+  printf "${C}[multi] Starting${Z} ${W}%s${Z} (mode=${W}%s${Z}%s) → ${C}%s${Z}\n" \
+    "$NAME" "$MODE" \
+    "$([ "$NB" -eq 1 ] && echo ", no-backtrack" || echo "")" \
+    "$BOT_LOG"
 
-  "${CMD[@]}" &
+  echo "[multi] Starting $NAME ($MODE)" >> "$MULTI_LOG"
+  "${CMD[@]}" >> "$BOT_LOG" 2>&1 &
   PIDS+=($!)
 
   # Stagger registrations so the arena doesn't reject simultaneous connections.
@@ -195,4 +226,5 @@ for i in "${!BOT_MODES[@]}"; do
 done
 
 printf "\n${G}[multi] ${#PIDS[@]} bots running. Ctrl+C to stop all.${Z}\n"
+printf "${Y}[multi] To follow a bot: tail -f logs/latest_<NAME>.log${Z}\n\n"
 wait

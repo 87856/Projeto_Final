@@ -214,6 +214,24 @@ if [ ! -f "$JAR" ]; then
   exit 1
 fi
 
+# ---- logging ----------------------------------------------------------------
+mkdir -p logs
+TIMESTAMP=$(date +%Y-%m-%d_%H-%M-%S)
+_label="${BOT_NAME:-single}_${BOT_MODE:-default}"
+LOG_FILE="logs/${TIMESTAMP}_${_label}.log"
+{
+  echo "# Arena Agent Log"
+  echo "# Started:  $(date)"
+  echo "# Mode:     ${BOT_MODE:-opportunist}"
+  echo "# Name:     ${BOT_NAME:-(from dialog)}"
+  echo "# Room:     ${BOT_ROOM:-(from dialog)}"
+  echo "# Backtrack: ${ANTI_BACKTRACK}"
+  echo "# ----------------------------------------"
+} > "$LOG_FILE"
+# Symlink latest.log → this run (ln -sf may fail silently on NTFS; that's OK)
+ln -sf "$(basename "$LOG_FILE")" logs/latest.log 2>/dev/null || true
+info "Log: $LOG_FILE  (tail -f $LOG_FILE)"
+
 # ---- run --------------------------------------------------------------------
 info "A iniciar o Agente Explorador..."
 echo
@@ -222,4 +240,4 @@ java ${BOT_MODE:+-Dbot.mode="$BOT_MODE"} \
      ${BOT_NAME:+-Dbot.name="$BOT_NAME"} \
      ${BOT_ROOM:+-Dbot.room="$BOT_ROOM"} \
      ${NO_GUI:+-Dbot.noGui=true} \
-     -jar "$JAR" "${PASSTHROUGH[@]}"
+     -jar "$JAR" "${PASSTHROUGH[@]}" 2>&1 | tee -a "$LOG_FILE"
