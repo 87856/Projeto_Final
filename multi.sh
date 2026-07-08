@@ -16,6 +16,7 @@ ROOM=""
 NO_GUI=0
 DO_BUILD=1
 NONINTERACTIVE=0
+BOT_SERVER=""
 
 # Per-bot arrays (populated either interactively or from --modes flag)
 BOT_NAMES=()
@@ -35,6 +36,11 @@ while [ $# -gt 0 ]; do
     --room)     shift; ROOM="$1" ;;
     --no-gui)   NO_GUI=1 ;;
     --no-build) DO_BUILD=0 ;;
+    --local)
+      shift 2>/dev/null || true
+      _port="${1:-8080}"
+      [[ "$_port" =~ ^[0-9]+$ ]] && BOT_SERVER="http://localhost:$_port" || BOT_SERVER="http://localhost:8080" ;;
+    --server)   shift; BOT_SERVER="$1" ;;
     --modes)
       shift
       NONINTERACTIVE=1
@@ -88,10 +94,36 @@ if [ -z "$ROOM" ]; then
   fi
 fi
 
+# ---- confirm room (always, unless non-interactive) -------------------------
+if [ "$NONINTERACTIVE" -eq 0 ]; then
+  printf "${Y}Room [${W}%s${Y}] — correct? [Y/n/edit]:${Z} " "$ROOM"
+  read -r _rc
+  case "$_rc" in
+    [Nn]) printf "New room code: "; read -r ROOM; [ -z "$ROOM" ] && { echo "Aborted."; exit 1; } ;;
+    [Ee]*) printf "Room code [%s]: " "$ROOM"; read -r _nr; [ -n "$_nr" ] && ROOM="$_nr" ;;
+  esac
+fi
+
 # ---- interactive bot config -------------------------------------------------
 if [ "$NONINTERACTIVE" -eq 0 ]; then
+  printf "\n${G}=== Available Modes ===${Z}\n"
+  printf "  ${C}%-14s${Z} %s\n" "opportunist"  "Balanced default"
+  printf "  ${C}%-14s${Z} %s\n" "berserker"    "All-in aggression; flee at HP 20"
+  printf "  ${C}%-14s${Z} %s\n" "dominator"    "Attack any rival in range 3"
+  printf "  ${C}%-14s${Z} %s\n" "bully"        "Hunt weakest rival"
+  printf "  ${C}%-14s${Z} %s\n" "coward"       "HIDE always; never fights"
+  printf "  ${C}%-14s${Z} %s\n" "ghost"        "Flee from any visible rival"
+  printf "  ${C}%-14s${Z} %s\n" "survivor"     "Resources first; flee at HP 120"
+  printf "  ${C}%-14s${Z} %s\n" "passive"      "Retaliate only when cornered"
+  printf "  ${C}%-14s${Z} %s\n" "farmer"       "Farm resources; ignore combat"
+  printf "  ${C}%-14s${Z} %s\n" "treasure"     "Hunt chests; skip combat"
+  printf "  ${C}%-14s${Z} %s\n" "hoarder"      "Chests first; light combat"
+  printf "  ${C}%-14s${Z} %s\n" "rich"         "Open chests only"
+  printf "  ${C}%-14s${Z} %s\n" "assassin"     "Attack only with 50+ HP advantage"
+  printf "  ${C}%-14s${Z} %s\n" "scavenger"    "Farm safely; avoid combat"
+  printf "  ${C}%-14s${Z} %s\n" "explorer"     "Max map coverage; skip combat"
+  printf "  ${C}%-14s${Z} %s\n" "no-llm"       "Pure heuristic; no AI calls"
   printf "\n${G}=== Bot Configuration ===${Z}\n"
-  printf "${C}Room: ${W}%s${Z}\n\n" "$ROOM"
 
   printf "${Y}How many bots?${Z} [3]: "; read -r N
   N="${N:-3}"
@@ -206,8 +238,9 @@ for i in "${!BOT_MODES[@]}"; do
     "-Dbot.room=$ROOM"
     "-Dbot.mode=$MODE"
   )
-  [ "$NB" -eq 1 ]    && CMD+=("-Dbot.antiBacktrack=true")
-  [ "$NO_GUI" -eq 1 ] && CMD+=("-Dbot.noGui=true")
+  [ "$NB" -eq 1 ]           && CMD+=("-Dbot.antiBacktrack=true")
+  [ "$NO_GUI" -eq 1 ]       && CMD+=("-Dbot.noGui=true")
+  [ -n "$BOT_SERVER" ]      && CMD+=("-Dbot.server=$BOT_SERVER")
   CMD+=("-jar" "$JAR")
 
   printf "${C}[multi] Starting${Z} ${W}%s${Z} (mode=${W}%s${Z}%s) → ${C}%s${Z}\n" \

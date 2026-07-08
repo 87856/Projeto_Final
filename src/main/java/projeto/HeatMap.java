@@ -50,6 +50,7 @@ public class HeatMap extends JPanel {
     private JLabel    labelStatus;
     private JTextArea telPanel;
     private boolean   guiEnabled;
+    private String    nomeRobo;
 
 
     public HeatMap(String nomeRobo, boolean modoLLM) {
@@ -57,6 +58,7 @@ public class HeatMap extends JPanel {
     }
 
     public HeatMap(String nomeRobo, boolean modoLLM, boolean guiEnabled) {
+        this.nomeRobo   = nomeRobo;
         this.guiEnabled = guiEnabled;
         if (!guiEnabled) return; // headless: skip all Swing construction
         setPreferredSize(new Dimension(
@@ -420,7 +422,9 @@ public class HeatMap extends JPanel {
         if (!guiEnabled) return;
 
         String txt =
-            "─── CONFIG ─────────────────\n" +
+            "─── BOT ────────────────────\n" +
+            String.format(" Name:      %-17s%n", nomeRobo != null ? nomeRobo : "?") +
+            "\n─── CONFIG ─────────────────\n" +
             String.format(" Mode:      %-17s%n", mode) +
             String.format(" Backtrack: %-17s%n", antiBacktrack ? "penalised (3x3)" : "free") +
             "\n─── TIMING (decidirAcao) ───\n" +

@@ -15,6 +15,7 @@ public class Agent {
 
 
     public  static final String SERVIDOR_ARENA  = "https://arena.pmonteiro.ovh";
+    public  static final String SERVIDOR_LOCAL  = "http://localhost:8080";
     public  static final int    SLEEP_MS        = 400;
     public  static final int    HP_FUGA         = 60;
 
@@ -71,7 +72,8 @@ public class Agent {
 
     public Agent(String nomeRobo, String codigoSala, boolean modoLLM, boolean gui) {
         this.modoLLM     = modoLLM;
-        this.arenaClient = new Arena(SERVIDOR_ARENA, nomeRobo, codigoSala);
+        String servidor  = System.getProperty("bot.server", SERVIDOR_ARENA);
+        this.arenaClient = new Arena(servidor, nomeRobo, codigoSala);
         this.ollamaClient = new Ollama_Client();
         this.painel      = new HeatMap(nomeRobo, modoLLM, gui);
         this.config      = BotConfig.fromMode(System.getProperty("bot.mode", "opportunist"));
@@ -122,18 +124,27 @@ public class Agent {
         try (InputStream in = Files.newInputStream(propsPath)) { lastRun.load(in); }
         catch (Exception ignored) {}
 
-        JTextField campoNome  = new JTextField(lastRun.getProperty("nome", "Alfa"));
-        JTextField campoSala  = new JTextField(lastRun.getProperty("sala", "aluno_treino_2026"));
-        JCheckBox  checkLLM   = new JCheckBox("Modo Heurística Pura (Sem LLM)");
+        JTextField campoNome     = new JTextField(lastRun.getProperty("nome", "Alfa"));
+        JTextField campoSala     = new JTextField(lastRun.getProperty("sala", "aluno_treino_2026"));
+        JCheckBox  checkLLM      = new JCheckBox("Modo Heurística Pura (Sem LLM)");
+        JTextField campoServidor = new JTextField(lastRun.getProperty("servidor", SERVIDOR_ARENA));
 
-        String[] servidores   = {"Produção (arena.pmonteiro.ovh)", "Localhost (dev)"};
+        String[] servidores = {"Produção (arena.pmonteiro.ovh)", "Localhost (dev)"};
         JComboBox<String> comboServidor = new JComboBox<>(servidores);
+        // Sync combo → text field so user can also edit the URL directly.
+        comboServidor.addActionListener(e -> {
+            if (comboServidor.getSelectedIndex() == 1)
+                campoServidor.setText(SERVIDOR_LOCAL);
+            else
+                campoServidor.setText(SERVIDOR_ARENA);
+        });
 
         Object[] campos = {
-                "Identificador do Robô:",     campoNome,
+                "Identificador do Robô:",       campoNome,
                 "Código da Sala (Ex: ABCD12):", campoSala,
-                "Servidor Alvo:",             comboServidor,
-                "Desempenho:",                checkLLM
+                "Servidor:",                    comboServidor,
+                "URL (editável):",              campoServidor,
+                "Desempenho:",                  checkLLM
         };
 
         int resultado = JOptionPane.showConfirmDialog(
@@ -148,23 +159,26 @@ public class Agent {
             return;
         }
 
-        String nomeRobo   = campoNome.getText().trim();
-        String codigoSala = campoSala.getText().trim();
-        boolean semLLM    = checkLLM.isSelected();
+        String nomeRobo    = campoNome.getText().trim();
+        String codigoSala  = campoSala.getText().trim();
+        String servidorUrl = campoServidor.getText().trim();
+        boolean semLLM     = checkLLM.isSelected();
 
         if (nomeRobo.isEmpty() || codigoSala.isEmpty()) {
             JOptionPane.showMessageDialog(null, "Nome e Sala são obrigatórios!", "Erro", JOptionPane.ERROR_MESSAGE);
             return;
         }
 
-        // Persist name + room for next launch.
+        // Persist name + room + server for next launch.
         try (OutputStream out = Files.newOutputStream(propsPath)) {
             Properties save = new Properties();
             save.setProperty("nome", nomeRobo);
             save.setProperty("sala", codigoSala);
+            save.setProperty("servidor", servidorUrl.isEmpty() ? SERVIDOR_ARENA : servidorUrl);
             save.store(out, "Arena Agent — last run");
         } catch (Exception ignored) {}
 
+        if (!servidorUrl.isEmpty()) System.setProperty("bot.server", servidorUrl);
         Agent agente = new Agent(nomeRobo, codigoSala, !semLLM);
         agente.iniciar();
     }

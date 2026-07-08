@@ -41,6 +41,7 @@ ANTI_BACKTRACK=0
 BOT_NAME=""
 BOT_ROOM=""
 NO_GUI=0
+BOT_SERVER=""
 PASSTHROUGH=()
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -48,6 +49,12 @@ while [ $# -gt 0 ]; do
     --no-ollama) DO_OLLAMA=0 ;;
     --pull)      FORCE_PULL=1 ;;
     --models)    shift; IFS=',' read -r -a MODELS <<< "${1:-}" ;;
+    --local)
+      shift 2>/dev/null || true
+      _port="${1:-8080}"
+      if [[ "$_port" =~ ^[0-9]+$ ]]; then BOT_SERVER="http://localhost:$_port"; else
+        BOT_SERVER="http://localhost:8080"; PASSTHROUGH+=("$_port"); fi ;;
+    --server)    shift; BOT_SERVER="$1" ;;
     --mode)
       shift
       case "${1:-}" in
@@ -240,4 +247,5 @@ java ${BOT_MODE:+-Dbot.mode="$BOT_MODE"} \
      ${BOT_NAME:+-Dbot.name="$BOT_NAME"} \
      ${BOT_ROOM:+-Dbot.room="$BOT_ROOM"} \
      ${NO_GUI:+-Dbot.noGui=true} \
+     ${BOT_SERVER:+-Dbot.server="$BOT_SERVER"} \
      -jar "$JAR" "${PASSTHROUGH[@]}" 2>&1 | tee -a "$LOG_FILE"
