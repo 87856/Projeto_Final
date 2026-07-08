@@ -38,6 +38,10 @@ DO_BUILD=1; DO_OLLAMA=1; FORCE_PULL=0
 MODELS=("${DEFAULT_MODELS[@]}")
 BOT_MODE=""
 ANTI_BACKTRACK=0
+BOT_NAME=""
+BOT_ROOM=""
+NO_GUI=0
+BOT_SERVER=""
 PASSTHROUGH=()
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -45,6 +49,12 @@ while [ $# -gt 0 ]; do
     --no-ollama) DO_OLLAMA=0 ;;
     --pull)      FORCE_PULL=1 ;;
     --models)    shift; IFS=',' read -r -a MODELS <<< "${1:-}" ;;
+    --local)
+      shift 2>/dev/null || true
+      _port="${1:-}"
+      if [[ "$_port" =~ ^[0-9]+$ ]]; then BOT_SERVER="http://localhost:$_port"; shift || true
+      else BOT_SERVER="http://localhost:8080"; [ -n "$_port" ] && PASSTHROUGH+=("$_port"); fi ;;
+    --server)    shift; BOT_SERVER="$1" ;;
     --mode)
       shift
       case "${1:-}" in
@@ -75,6 +85,9 @@ while [ $# -gt 0 ]; do
           BOT_MODE="$1" ;;
       esac ;;
     --no-backtrack) ANTI_BACKTRACK=1 ;;
+    --name)    shift; BOT_NAME="$1" ;;
+    --room)    shift; BOT_ROOM="$1" ;;
+    --no-gui)  NO_GUI=1 ;;
     -h|--help)
       cat <<'HELP'
 
@@ -187,12 +200,19 @@ if [ "$DO_OLLAMA" -eq 1 ] && command -v ollama >/dev/null 2>&1; then
 fi
 
 # ---- build ------------------------------------------------------------------
+# Build in /tmp to avoid NTFS mount restrictions on mvn clean (can't delete target/).
 if [ "$DO_BUILD" -eq 1 ]; then
-  info "A compilar com Maven..."
-  if ! "$MVN" clean package -q; then
+  info "A compilar com Maven (via /tmp — contorna restricoes NTFS)..."
+  TMPBUILD=$(mktemp -d)
+  cp -r src "$TMPBUILD/" && cp pom.xml "$TMPBUILD/"
+  if ! "$MVN" -f "$TMPBUILD/pom.xml" clean package -q; then
     err "Falha na compilacao."
+    rm -rf "$TMPBUILD"
     exit 1
   fi
+  mkdir -p target
+  cp "$TMPBUILD/target/"*.jar target/
+  rm -rf "$TMPBUILD"
   ok "Compilacao bem-sucedida."
 fi
 
@@ -201,9 +221,31 @@ if [ ! -f "$JAR" ]; then
   exit 1
 fi
 
+# ---- logging ----------------------------------------------------------------
+mkdir -p logs
+TIMESTAMP=$(date +%Y-%m-%d_%H-%M-%S)
+_label="${BOT_NAME:-single}_${BOT_MODE:-default}"
+LOG_FILE="logs/${TIMESTAMP}_${_label}.log"
+{
+  echo "# Arena Agent Log"
+  echo "# Started:  $(date)"
+  echo "# Mode:     ${BOT_MODE:-opportunist}"
+  echo "# Name:     ${BOT_NAME:-(from dialog)}"
+  echo "# Room:     ${BOT_ROOM:-(from dialog)}"
+  echo "# Backtrack: ${ANTI_BACKTRACK}"
+  echo "# ----------------------------------------"
+} > "$LOG_FILE"
+# Symlink latest.log → this run (ln -sf may fail silently on NTFS; that's OK)
+ln -sf "$(basename "$LOG_FILE")" logs/latest.log 2>/dev/null || true
+info "Log: $LOG_FILE  (tail -f $LOG_FILE)"
+
 # ---- run --------------------------------------------------------------------
 info "A iniciar o Agente Explorador..."
 echo
 java ${BOT_MODE:+-Dbot.mode="$BOT_MODE"} \
      ${ANTI_BACKTRACK:+-Dbot.antiBacktrack=true} \
-     -jar "$JAR" "${PASSTHROUGH[@]}"
+     ${BOT_NAME:+-Dbot.name="$BOT_NAME"} \
+     ${BOT_ROOM:+-Dbot.room="$BOT_ROOM"} \
+     ${NO_GUI:+-Dbot.noGui=true} \
+     ${BOT_SERVER:+-Dbot.server="$BOT_SERVER"} \
+     -jar "$JAR" "${PASSTHROUGH[@]}" 2>&1 | tee -a "$LOG_FILE"

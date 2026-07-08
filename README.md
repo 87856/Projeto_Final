@@ -99,7 +99,7 @@ bash start.sh --help
 | Flag | Effect |
 |------|--------|
 | `--mode <name>` | Select a bot behaviour profile (default: `opportunist`) |
-| `--no-backtrack` | Adds +25 heat penalty to the last 5 visited cells during exploration. Forces the bot to prefer unexplored space over retracing its own path. Combinable with any mode. Penalty is additive so the bot can still backtrack when every other direction is blocked. |
+| `--no-backtrack` | Adds +25 heat penalty to the last 8 visited cells during exploration. Forces the bot to prefer unexplored space over retracing its own path. Combinable with any mode. Penalty is additive so the bot can still backtrack when every other direction is blocked. |
 | `--no-build` | Skip `mvn clean package`; reuse existing jar |
 | `--no-ollama` | Skip Ollama checks; forces pure-heuristic loop |
 | `--pull` | Force re-pull all Ollama models |

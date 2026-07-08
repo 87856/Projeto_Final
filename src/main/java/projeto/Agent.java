@@ -5,7 +5,10 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 
 import javax.swing.*;
+import java.io.*;
+import java.nio.file.*;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
 
 
@@ -13,6 +16,7 @@ public class Agent {
 
 
     public  static final String SERVIDOR_ARENA  = "https://arena.pmonteiro.ovh";
+    public  static final String SERVIDOR_LOCAL  = "http://localhost:8080";
     public  static final int    SLEEP_MS        = 400;
     public  static final int    HP_FUGA         = 60;
 
@@ -27,9 +31,20 @@ public class Agent {
     private final HeatMap painel;
 
 
-    private final Map<String, Integer> historicoVisitas = new HashMap<>();
-    private final Set<String>          cofresFalhados   = new HashSet<>();
-    private final Queue<String>        filaAcoesPlaneadas = new LinkedList<>();
+    private final Map<String, Integer> historicoVisitas      = new HashMap<>();
+    private final Set<String>          cofresFalhados        = new HashSet<>();
+    private final Queue<String>        filaAcoesPlaneadas    = new LinkedList<>();
+    private final Map<String, Integer> chestNavAttempts      = new HashMap<>();
+    private static final int MAX_CHEST_NAV_ATTEMPTS = 25;
+    private int cofresAbertos = 0;
+
+    // Async chest unlock: background thread computes key; main loop submits when ready.
+    private static final class ChestKeyResult {
+        final String key, chunkText;
+        ChestKeyResult(String key, String chunkText) { this.key = key; this.chunkText = chunkText; }
+    }
+    private final ConcurrentHashMap<String, ChestKeyResult> readyChestKeys = new ConcurrentHashMap<>();
+    private final Set<String> computingChests = ConcurrentHashMap.newKeySet();
     private List<Vetores>    baseDocumentos   = new ArrayList<>();
 
     // ---- Two-tier LLM brain (null unless modoLLM && ollama up) -----------
@@ -43,9 +58,15 @@ public class Agent {
     // Mode configuration (set once at construction from -Dbot.mode system property).
     private final BotConfig config;
 
+    // Decision-time ring buffer: ms taken by decidirAcao() per tick.
+    private static final int TIMING_SAMPLES = 200;
+    private final long[] tickTimes  = new long[TIMING_SAMPLES];
+    private int tickTimeHead   = 0;
+    private int tickTimeFilled = 0;
+
     // Anti-backtrack: penalise the last RECENCY_DEPTH cells in exploration scoring.
     // Enabled via -Dbot.antiBacktrack=true (start.sh --no-backtrack flag).
-    private static final int RECENCY_DEPTH = 8;
+    private static final int RECENCY_DEPTH = 50; // must cover full map height so trail persists end-to-end
     private final boolean antiBacktrack =
             "true".equalsIgnoreCase(System.getProperty("bot.antiBacktrack", "false"));
     private final ArrayDeque<String> recentPath = new ArrayDeque<>(RECENCY_DEPTH + 1);
@@ -58,10 +79,15 @@ public class Agent {
     private String estadoRAG  = "Manual não carregado";
 
     public Agent(String nomeRobo, String codigoSala, boolean modoLLM) {
+        this(nomeRobo, codigoSala, modoLLM, true);
+    }
+
+    public Agent(String nomeRobo, String codigoSala, boolean modoLLM, boolean gui) {
         this.modoLLM     = modoLLM;
-        this.arenaClient = new Arena(SERVIDOR_ARENA, nomeRobo, codigoSala);
+        String servidor  = System.getProperty("bot.server", SERVIDOR_ARENA);
+        this.arenaClient = new Arena(servidor, nomeRobo, codigoSala);
         this.ollamaClient = new Ollama_Client();
-        this.painel      = new HeatMap(nomeRobo, modoLLM);
+        this.painel      = new HeatMap(nomeRobo, modoLLM, gui);
         this.config      = BotConfig.fromMode(System.getProperty("bot.mode", "opportunist"));
         System.out.println("[Agente] Modo: " + config.name
                 + (antiBacktrack ? " | anti-backtrack ON (depth=" + RECENCY_DEPTH + ")" : ""));
@@ -92,18 +118,45 @@ public class Agent {
             System.exit(0);
         }
 
-        JTextField campoNome  = new JTextField("Alfa");
-        JTextField campoSala  = new JTextField("aluno_treino_2026");
-        JCheckBox  checkLLM   = new JCheckBox("Modo Heurística Pura (Sem LLM)");
+        // Headless / scripted mode: --name and --room skip the dialog entirely.
+        // Used by multi.sh to launch N bots from a script without popups.
+        String cliName = System.getProperty("bot.name");
+        String cliRoom = System.getProperty("bot.room");
+        boolean noGui  = "true".equalsIgnoreCase(System.getProperty("bot.noGui", "false"));
+        if (cliName != null && cliRoom != null) {
+            System.out.printf("[Agente] Modo scripted: nome=%s sala=%s gui=%s%n",
+                    cliName, cliRoom, !noGui);
+            new Agent(cliName, cliRoom, true, !noGui).iniciar();
+            return;
+        }
 
-        String[] servidores   = {"Produção (arena.pmonteiro.ovh)", "Localhost (dev)"};
+        // Load last-used name + room from ~/.arena_agent.properties.
+        Path propsPath = Paths.get(System.getProperty("user.home"), ".arena_agent.properties");
+        Properties lastRun = new Properties();
+        try (InputStream in = Files.newInputStream(propsPath)) { lastRun.load(in); }
+        catch (Exception ignored) {}
+
+        JTextField campoNome     = new JTextField(lastRun.getProperty("nome", "Alfa"));
+        JTextField campoSala     = new JTextField(lastRun.getProperty("sala", "aluno_treino_2026"));
+        JCheckBox  checkLLM      = new JCheckBox("Modo Heurística Pura (Sem LLM)");
+        JTextField campoServidor = new JTextField(lastRun.getProperty("servidor", SERVIDOR_ARENA));
+
+        String[] servidores = {"Produção (arena.pmonteiro.ovh)", "Localhost (dev)"};
         JComboBox<String> comboServidor = new JComboBox<>(servidores);
+        // Sync combo → text field so user can also edit the URL directly.
+        comboServidor.addActionListener(e -> {
+            if (comboServidor.getSelectedIndex() == 1)
+                campoServidor.setText(SERVIDOR_LOCAL);
+            else
+                campoServidor.setText(SERVIDOR_ARENA);
+        });
 
         Object[] campos = {
-                "Identificador do Robô:",     campoNome,
+                "Identificador do Robô:",       campoNome,
                 "Código da Sala (Ex: ABCD12):", campoSala,
-                "Servidor Alvo:",             comboServidor,
-                "Desempenho:",                checkLLM
+                "Servidor:",                    comboServidor,
+                "URL (editável):",              campoServidor,
+                "Desempenho:",                  checkLLM
         };
 
         int resultado = JOptionPane.showConfirmDialog(
@@ -118,15 +171,26 @@ public class Agent {
             return;
         }
 
-        String nomeRobo   = campoNome.getText().trim();
-        String codigoSala = campoSala.getText().trim();
-        boolean semLLM    = checkLLM.isSelected();
+        String nomeRobo    = campoNome.getText().trim();
+        String codigoSala  = campoSala.getText().trim();
+        String servidorUrl = campoServidor.getText().trim();
+        boolean semLLM     = checkLLM.isSelected();
 
         if (nomeRobo.isEmpty() || codigoSala.isEmpty()) {
             JOptionPane.showMessageDialog(null, "Nome e Sala são obrigatórios!", "Erro", JOptionPane.ERROR_MESSAGE);
             return;
         }
 
+        // Persist name + room + server for next launch.
+        try (OutputStream out = Files.newOutputStream(propsPath)) {
+            Properties save = new Properties();
+            save.setProperty("nome", nomeRobo);
+            save.setProperty("sala", codigoSala);
+            save.setProperty("servidor", servidorUrl.isEmpty() ? SERVIDOR_ARENA : servidorUrl);
+            save.store(out, "Arena Agent — last run");
+        } catch (Exception ignored) {}
+
+        if (!servidorUrl.isEmpty()) System.setProperty("bot.server", servidorUrl);
         Agent agente = new Agent(nomeRobo, codigoSala, !semLLM);
         agente.iniciar();
     }
@@ -144,10 +208,13 @@ public class Agent {
         }
 
 
-        // After registar()
         try {
             JsonObject respostaRegisto = arenaClient.registar();
-            System.out.println("[Agente] Registo resposta completa: " + respostaRegisto);
+            System.out.println("[Agente] Registo resposta: " + respostaRegisto);
+            if (respostaRegisto == null) {
+                System.err.println("[Agente] ERRO: registo recusado pelo servidor (resposta nula). A encerrar.");
+                return;
+            }
         } catch (Exception e) {
             System.err.println("[Agente] Falha no registo: " + e.getMessage());
             e.printStackTrace();
@@ -161,10 +228,14 @@ public class Agent {
             inicializarCamadasLLM();
         }
 
+        // Load + vectorise the manual in the background so the game loop starts
+        // immediately after registration. The arena drops bots that take too long
+        // to send their first perceive. RAG is gracefully unavailable until ready.
         if (modoLLM && !config.llmDisabled) {
-            carregarManual();
+            Thread manualThread = new Thread(this::carregarManual, "manual-loader");
+            manualThread.setDaemon(true);
+            manualThread.start();
         }
-
 
         System.out.println("[Agente] A entrar no ciclo principal...");
         while (true) {
@@ -214,8 +285,11 @@ public class Agent {
                 publicarTickSnapshot(percepcao);
 
 
+                long t0 = System.currentTimeMillis();
                 String acaoEscolhida = decidirAcao(percepcao);
-
+                tickTimes[tickTimeHead] = System.currentTimeMillis() - t0;
+                tickTimeHead = (tickTimeHead + 1) % TIMING_SAMPLES;
+                if (tickTimeFilled < TIMING_SAMPLES) tickTimeFilled++;
 
                 executarAcao(acaoEscolhida, percepcao);
 
@@ -286,12 +360,41 @@ public class Agent {
         // 1. Planned action queue (always highest priority).
         if (!filaAcoesPlaneadas.isEmpty()) return filaAcoesPlaneadas.poll();
 
-        // 2. Chest enigma unlock — always attempted regardless of mode
-        //    (if the bot is standing on a chest, open it).
+        // 2. Chest enigma unlock — async: background thread finds key; main loop submits it.
         String enigma = arenaClient.extrairEnigmaCofre(percepcao);
         String chaveCofreAtual = xAtual + "," + yAtual;
         if (enigma != null && !cofresFalhados.contains(chaveCofreAtual)) {
-            return tentarDesbloquearCofre(enigma, chaveCofreAtual);
+            ChestKeyResult ready = readyChestKeys.remove(chaveCofreAtual);
+            if (ready != null) {
+                return submeterChaveCofre(ready, chaveCofreAtual);
+            }
+            if (!modoLLM || baseDocumentos.isEmpty()) {
+                cofresFalhados.add(chaveCofreAtual);
+            } else if (!computingChests.contains(chaveCofreAtual)) {
+                computingChests.add(chaveCofreAtual);
+                final String enigmaFinal = enigma;
+                estadoRAG = "A pesquisar chave (async)...";
+                Thread t = new Thread(() -> {
+                    try {
+                        Vetores chunk = ollamaClient.encontrarChunkMaisRelevante(enigmaFinal, baseDocumentos);
+                        if (chunk == null) { cofresFalhados.add(chaveCofreAtual); return; }
+                        String key = ollamaClient.extrairChaveRAG(enigmaFinal, chunk.getTexto());
+                        if (key != null) readyChestKeys.put(chaveCofreAtual, new ChestKeyResult(key, chunk.getTexto()));
+                        else cofresFalhados.add(chaveCofreAtual);
+                    } catch (Exception e) {
+                        System.err.println("[Agente] Erro async cofre: " + e.getMessage());
+                        cofresFalhados.add(chaveCofreAtual);
+                    } finally {
+                        computingChests.remove(chaveCofreAtual);
+                    }
+                }, "chest-key-" + chaveCofreAtual);
+                t.setDaemon(true);
+                t.start();
+            } else {
+                estadoRAG = "A computar chave...";
+            }
+            // Explore while key is being computed; navegarParaCofre will bring us back.
+            return explorarPorCalor(percepcao);
         }
 
         // 3. Fast tactical LLM override — only for combat-capable modes.
@@ -397,44 +500,17 @@ public class Agent {
         }
     }
 
-    private String tentarDesbloquearCofre(String enigma, String chave) {
-        System.out.println("[Agente] Cofre detetado! Enigma: " + enigma);
-
-        if (!modoLLM || baseDocumentos.isEmpty()) {
-            System.err.println("[Agente] LLM desativado ou manual não carregado. A ignorar cofre.");
-            cofresFalhados.add(chave);
-            return explorarPorCalor(null);
-        }
-
+    private String submeterChaveCofre(ChestKeyResult result, String chave) {
         try {
-            estadoRAG = "A pesquisar manual...";
-            Vetores chunkRelevante = ollamaClient.encontrarChunkMaisRelevante(enigma, baseDocumentos);
-
-            if (chunkRelevante == null) {
-                estadoRAG = "Chunk não encontrado";
-                cofresFalhados.add(chave);
-                return explorarPorCalor(null);
-            }
-
-            estadoRAG = "A extrair chave com LLM...";
-            String chaveExtraida = ollamaClient.extrairChaveRAG(enigma, chunkRelevante.getTexto());
-
-            if (chaveExtraida == null) {
-                estadoRAG = "LLM não gerou chave";
-                cofresFalhados.add(chave);
-                return explorarPorCalor(null);
-            }
-
-
-            estadoRAG = "A submeter chave: " + chaveExtraida;
-            JsonObject resultado = arenaClient.desbloquearCofre(chaveExtraida, chunkRelevante.getTexto(), chaveExtraida);
-
-            if (resultado != null) {
-                String status = resultado.has("status") ? resultado.get("status").getAsString() : "";
+            estadoRAG = "A submeter chave: " + result.key;
+            System.out.println("[Agente] Cofre " + chave + " — a submeter chave: " + result.key);
+            JsonObject resposta = arenaClient.desbloquearCofre(result.key, result.chunkText, result.key);
+            if (resposta != null) {
+                String status = resposta.has("status") ? resposta.get("status").getAsString() : "";
                 if ("sucesso".equals(status)) {
-                    estadoRAG = "✓ Cofre aberto! +" + 100 + "HP";
+                    cofresAbertos++;
+                    estadoRAG = "✓ Cofre aberto! +100HP";
                     System.out.println("[Agente] COFRE ABERTO! +100 HP");
-
                     filaAcoesPlaneadas.add("MOVER_NORTE");
                     filaAcoesPlaneadas.add("MOVER_NORTE");
                 } else {
@@ -443,13 +519,11 @@ public class Agent {
                     cofresFalhados.add(chave);
                 }
             }
-
         } catch (Exception e) {
-            estadoRAG = "Erro RAG: " + e.getMessage();
-            System.err.println("[Agente] Erro no pipeline RAG: " + e.getMessage());
+            estadoRAG = "Erro ao submeter: " + e.getMessage();
+            System.err.println("[Agente] Erro ao submeter chave: " + e.getMessage());
             cofresFalhados.add(chave);
         }
-
         return explorarPorCalor(null);
     }
 
@@ -601,6 +675,14 @@ public class Agent {
 
                 if (cofresFalhados.contains(chaveCofre)) continue;
 
+                // Give up on unreachable chests after MAX_CHEST_NAV_ATTEMPTS ticks targeting them.
+                int attempts = chestNavAttempts.getOrDefault(chaveCofre, 0);
+                if (attempts > MAX_CHEST_NAV_ATTEMPTS) {
+                    cofresFalhados.add(chaveCofre);
+                    System.err.println("[Agente] Cofre " + chaveCofre + " inacessível após " + attempts + " tentativas. A ignorar.");
+                    continue;
+                }
+
                 int dist = Math.abs(cx - xAtual) + Math.abs(cy - yAtual);
                 if (dist < melhorDist) {
                     melhorDist = dist;
@@ -609,7 +691,11 @@ public class Agent {
                 }
             }
 
-            if (alvoX != -1) return moverEmDirecao(alvoX, alvoY);
+            if (alvoX != -1) {
+                String key = alvoX + "," + alvoY;
+                chestNavAttempts.merge(key, 1, Integer::sum);
+                return moverEmDirecao(alvoX, alvoY);
+            }
         } catch (Exception e) {
             System.err.println("[Agente] Erro ao navegar para cofre: " + e.getMessage());
         }
@@ -642,9 +728,24 @@ public class Agent {
             } catch (Exception ignored) {}
         }
 
+        // For skipCombat / fleeFromAny modes, treat rival positions as walls so the
+        // bot never accidentally walks into an opponent during exploration.
+        if (config.skipCombat || config.fleeFromAny) {
+            if (percepcao != null && percepcao.has("outros_robots")) {
+                try {
+                    for (JsonElement e : percepcao.get("outros_robots").getAsJsonArray()) {
+                        JsonObject r = e.getAsJsonObject();
+                        paredes.add(r.get("x").getAsInt() + "," + r.get("y").getAsInt());
+                    }
+                } catch (Exception ignored) {}
+            }
+        }
 
-        String melhorAcao = acoes[new Random().nextInt(acoes.length)];
+
+        // Collect candidates with equal minimum heat, then pick randomly among them.
+        // Random tie-breaking prevents the deterministic lawnmower pattern.
         int menorCalor = Integer.MAX_VALUE;
+        List<String> melhores = new ArrayList<>(4);
 
         for (int i = 0; i < candidatos.length; i++) {
             int cx = candidatos[i][0];
@@ -654,13 +755,19 @@ public class Agent {
             if (paredes.contains(chave)) continue;
 
             int calor = historicoVisitas.getOrDefault(chave, 0);
-            // Penalise cells within the 3x3 neighbourhood of any recent position.
             if (antiBacktrack && isNearRecentPath(cx, cy)) calor += 25;
             if (calor < menorCalor) {
                 menorCalor = calor;
-                melhorAcao = acoes[i];
+                melhores.clear();
+                melhores.add(acoes[i]);
+            } else if (calor == menorCalor) {
+                melhores.add(acoes[i]);
             }
         }
+
+        String melhorAcao = melhores.isEmpty()
+                ? acoes[new Random().nextInt(acoes.length)]                // all walls — random
+                : melhores.get(new Random().nextInt(melhores.size()));     // random tie-break
 
         return melhorAcao;
     }
@@ -714,11 +821,65 @@ public class Agent {
 
 
     private void atualizarPainel(JsonObject percepcao) {
-        // Status bar shows current goal + rival classifier map.
         String goalStr = strategyState != null ? strategyState.currentGoal().name() : "—";
         List<RivalProfile> rivals = rivalTracker != null
                 ? rivalTracker.snapshotForPlanner() : Collections.emptyList();
         painel.atualizar(percepcao, historicoVisitas, hpAtual, xAtual, yAtual,
                 ultimaAcao, estadoRAG, goalStr, rivals);
+
+        // — fast tactical —
+        String fastReason = "(no suggestion yet)";
+        String fastAction = "—";
+        long   fastTick   = -1;
+        if (fastTactical != null) {
+            FastTacticalClient.TacticalSuggestion sug = fastTactical.getSuggestion();
+            if (sug != null) {
+                if (!sug.reason.isBlank()) fastReason = sug.reason;
+                fastAction = sug.action;
+                fastTick   = sug.tick;
+            }
+        }
+        // — planner —
+        long plannerTick      = -1;
+        int  rivalsClassified = 0;
+        int  rivalsTracked    = rivalTracker != null ? rivalTracker.snapshotForPlanner().size() : 0;
+        if (strategyState != null) {
+            StrategyState.Strategy st = strategyState.get();
+            plannerTick      = st.stampTick;
+            rivalsClassified = st.rivals != null ? st.rivals.size() : 0;
+        }
+        // — RAG —
+        int ragChunks = baseDocumentos != null ? baseDocumentos.size() : 0;
+
+        // — Chests —
+        int cofresTotal = 0;
+        if (percepcao != null && percepcao.has("cofres_no_mundo")) {
+            try { cofresTotal = percepcao.get("cofres_no_mundo").getAsJsonArray().size(); }
+            catch (Exception ignored) {}
+        }
+
+        long[] s = timingStats();
+        painel.atualizarTelemetria(
+                config.name, antiBacktrack,
+                modoLLM && !config.llmDisabled, config.runPlanner,
+                tickCounter, s[0], s[1], s[2], s[3],
+                goalStr, fastReason, fastAction, fastTick,
+                plannerTick, rivalsTracked, rivalsClassified, ragChunks,
+                cofresTotal, cofresAbertos, cofresFalhados.size(), estadoRAG);
+    }
+
+    private long[] timingStats() {
+        if (tickTimeFilled == 0) return new long[]{0, 0, 0, 0};
+        long[] copy = Arrays.copyOf(tickTimes, tickTimeFilled);
+        Arrays.sort(copy);
+        long sum = 0;
+        for (long v : copy) sum += v;
+        int p99idx = Math.max(0, (int)(copy.length * 0.99) - 1);
+        return new long[]{
+            sum / copy.length,     // avg
+            copy[0],               // min
+            copy[copy.length - 1], // max
+            copy[p99idx]           // p99 (worst 1%)
+        };
     }
 }

@@ -39,8 +39,12 @@ public class Arena {
 
         HttpResponse<String> resposta = httpClient.send(pedido, HttpResponse.BodyHandlers.ofString());
         String corpo = resposta.body();
-        System.out.println("[Arena] Registo: HTTP " + resposta.statusCode() + " | " + corpo);
-        if (resposta.statusCode() != 200) return null;
+        System.out.println("[Arena] Registo HTTP " + resposta.statusCode()
+                + " | robot=" + nomeRobo + " | " + corpo);
+        if (resposta.statusCode() != 200) {
+            System.err.println("[Arena] REGISTO RECUSADO: " + resposta.statusCode() + " — " + corpo);
+            return null;
+        }
         return JsonParser.parseString(corpo).getAsJsonObject();
     }
 
