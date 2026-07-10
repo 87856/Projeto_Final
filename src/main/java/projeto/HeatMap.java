@@ -87,7 +87,12 @@ public class HeatMap extends JPanel {
         telPanel.setForeground(new Color(160, 210, 255));
         telPanel.setFont(new Font("Monospaced", Font.PLAIN, 11));
         telPanel.setEditable(false);
+        telPanel.setLineWrap(true);
+        telPanel.setWrapStyleWord(true);
         telPanel.setBorder(BorderFactory.createEmptyBorder(6, 8, 6, 8));
+        // Keep the user's scroll position when setText() refreshes each tick.
+        ((javax.swing.text.DefaultCaret) telPanel.getCaret())
+                .setUpdatePolicy(javax.swing.text.DefaultCaret.NEVER_UPDATE);
         JScrollPane telScroll = new JScrollPane(telPanel,
                 JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED,
                 JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
@@ -419,7 +424,8 @@ public class HeatMap extends JPanel {
             String goal,
             String fastReason, String fastAction, long fastTick,
             long plannerTick, int rivalsTracked, int rivalsClassified, int ragChunks,
-            int cofresTotal, int cofresAbertos, int cofresFalhados, String ragStatus) {
+            int cofresTotal, int cofresAbertos, int cofresFalhados, String ragStatus,
+            String lastEnigma, String lastKey, String lastKeyResult) {
         if (!guiEnabled) return;
 
         String txt =
@@ -430,16 +436,22 @@ public class HeatMap extends JPanel {
             String.format(" Backtrack: %-17s%n", antiBacktrack ? "penalised (3x3)" : "free") +
             "\n─── TIMING (decidirAcao) ───\n" +
             String.format(" Tick #:    %-17d%n", tick) +
-            String.format(" Avg:       %d ms%n",   avgMs) +
-            String.format(" Min:       %d ms%n",   minMs) +
-            String.format(" Max:       %d ms%n",   maxMs) +
-            String.format(" p99 (1%%):  %d ms%n",  p99Ms) +
+            String.format(" Avg:       %s%n", avgMs == 0 ? "<1 ms" : avgMs + " ms") +
+            String.format(" Min:       %s%n", minMs == 0 ? "<1 ms" : minMs + " ms") +
+            String.format(" Max:       %d ms%n", maxMs) +
+            String.format(" p99 (1%%):  %d ms%n", p99Ms) +
             "\n─── COFRES ─────────────────\n" +
             String.format(" Visible:   %-17d%n", cofresTotal) +
             String.format(" Opened:    %-17d%n", cofresAbertos) +
             String.format(" Failed:    %-17d%n", cofresFalhados) +
             " Status:\n" +
             wrapText(ragStatus, 25) +
+            " Enigma:\n" +
+            wrapText(lastEnigma, 25) +
+            " Key tried:\n" +
+            wrapText(lastKey, 25) +
+            " Result:\n" +
+            wrapText(lastKeyResult, 25) +
             "\n─── qwen2.5:1.5b (fast) ───\n" +
             String.format(" Status:    %-17s%n", llmAtivo ? "ON" : "OFF") +
             String.format(" Last tick: %-17s%n", fastTick < 0 ? "—" : "#" + fastTick) +

@@ -32,9 +32,10 @@ public class Agent {
 
 
     private final Map<String, Integer> historicoVisitas      = new HashMap<>();
-    private final Set<String>          cofresFalhados        = new HashSet<>();
+    // Mutated by both the main loop and the chest-key threads.
+    private final Set<String>          cofresFalhados        = ConcurrentHashMap.newKeySet();
     private final Queue<String>        filaAcoesPlaneadas    = new LinkedList<>();
-    private final Map<String, Integer> chestNavAttempts      = new HashMap<>();
+    private final Map<String, Integer> chestNavAttempts      = new ConcurrentHashMap<>();
     private static final int MAX_CHEST_NAV_ATTEMPTS = 25;
     private int cofresAbertos = 0;
 
@@ -71,12 +72,23 @@ public class Agent {
             "true".equalsIgnoreCase(System.getProperty("bot.antiBacktrack", "false"));
     private final ArrayDeque<String> recentPath = new ArrayDeque<>(RECENCY_DEPTH + 1);
 
+    // Frontier-seeking exploration state: head toward the nearest never-visited
+    // cell with directional momentum, instead of a greedy least-heat local step.
+    private String lastMove       = null;      // for reversal/momentum penalty
+    private int[]  exploreTarget  = null;      // {x,y} current frontier goal
+    private String lastExplorePos = null;      // stuck detection between explore calls
+    private int    obsMinX = Integer.MAX_VALUE, obsMaxX = Integer.MIN_VALUE;
+    private int    obsMinY = Integer.MAX_VALUE, obsMaxY = Integer.MIN_VALUE;
+
     private int xAtual = 0;
     private int yAtual = 0;
     private int hpAtual = 200;
     private boolean modoLLM;
     private String ultimaAcao = "—";
-    private String estadoRAG  = "Manual não carregado";
+    private volatile String estadoRAG        = "Manual não carregado";
+    private volatile String lastChestEnigma  = "—";
+    private volatile String lastChestKey     = "—";
+    private volatile String lastChestResult  = "—";
 
     public Agent(String nomeRobo, String codigoSala, boolean modoLLM) {
         this(nomeRobo, codigoSala, modoLLM, true);
@@ -139,7 +151,11 @@ public class Agent {
         JTextField campoNome     = new JTextField(lastRun.getProperty("nome", "Alfa"));
         JTextField campoSala     = new JTextField(lastRun.getProperty("sala", "aluno_treino_2026"));
         JCheckBox  checkLLM      = new JCheckBox("Modo Heurística Pura (Sem LLM)");
-        JTextField campoServidor = new JTextField(lastRun.getProperty("servidor", SERVIDOR_ARENA));
+        // Localhost is a per-session setting — never restore it as the default.
+        String savedServer = lastRun.getProperty("servidor", SERVIDOR_ARENA);
+        if (savedServer.contains("localhost") || savedServer.contains("127.0.0.1"))
+            savedServer = SERVIDOR_ARENA;
+        JTextField campoServidor = new JTextField(savedServer);
 
         String[] servidores = {"Produção (arena.pmonteiro.ovh)", "Localhost (dev)"};
         JComboBox<String> comboServidor = new JComboBox<>(servidores);
@@ -186,7 +202,9 @@ public class Agent {
             Properties save = new Properties();
             save.setProperty("nome", nomeRobo);
             save.setProperty("sala", codigoSala);
-            save.setProperty("servidor", servidorUrl.isEmpty() ? SERVIDOR_ARENA : servidorUrl);
+            // Only persist non-localhost servers (localhost is session-only)
+            boolean isLocal = servidorUrl.contains("localhost") || servidorUrl.contains("127.0.0.1");
+            save.setProperty("servidor", (servidorUrl.isEmpty() || isLocal) ? SERVIDOR_ARENA : servidorUrl);
             save.store(out, "Arena Agent — last run");
         } catch (Exception ignored) {}
 
@@ -287,6 +305,10 @@ public class Agent {
 
                 long t0 = System.currentTimeMillis();
                 String acaoEscolhida = decidirAcao(percepcao);
+                // Safety net for skipCombat/fleeFromAny: if any code path (resource nav,
+                // chest nav, planned queue) chose a direction that walks into a rival, redirect.
+                if (config.skipCombat || config.fleeFromAny)
+                    acaoEscolhida = filtrarMovimentoCombate(acaoEscolhida, percepcao);
                 tickTimes[tickTimeHead] = System.currentTimeMillis() - t0;
                 tickTimeHead = (tickTimeHead + 1) % TIMING_SAMPLES;
                 if (tickTimeFilled < TIMING_SAMPLES) tickTimeFilled++;
@@ -363,25 +385,42 @@ public class Agent {
         // 2. Chest enigma unlock — async: background thread finds key; main loop submits it.
         String enigma = arenaClient.extrairEnigmaCofre(percepcao);
         String chaveCofreAtual = xAtual + "," + yAtual;
-        if (enigma != null && !cofresFalhados.contains(chaveCofreAtual)) {
+        if (enigma != null) {
+            // Ready key wins even if the chest was blacklisted while computing.
             ChestKeyResult ready = readyChestKeys.remove(chaveCofreAtual);
             if (ready != null) {
+                cofresFalhados.remove(chaveCofreAtual);
                 return submeterChaveCofre(ready, chaveCofreAtual);
             }
+        }
+        if (enigma != null && !cofresFalhados.contains(chaveCofreAtual)) {
             if (!modoLLM || baseDocumentos.isEmpty()) {
                 cofresFalhados.add(chaveCofreAtual);
             } else if (!computingChests.contains(chaveCofreAtual)) {
                 computingChests.add(chaveCofreAtual);
                 final String enigmaFinal = enigma;
+                lastChestEnigma = enigma.length() > 60 ? enigma.substring(0, 57) + "..." : enigma;
+                lastChestKey    = "—";
+                lastChestResult = "computing...";
                 estadoRAG = "A pesquisar chave (async)...";
                 Thread t = new Thread(() -> {
                     try {
                         Vetores chunk = ollamaClient.encontrarChunkMaisRelevante(enigmaFinal, baseDocumentos);
-                        if (chunk == null) { cofresFalhados.add(chaveCofreAtual); return; }
+                        if (chunk == null) { lastChestResult = "no chunk found"; cofresFalhados.add(chaveCofreAtual); return; }
                         String key = ollamaClient.extrairChaveRAG(enigmaFinal, chunk.getTexto());
-                        if (key != null) readyChestKeys.put(chaveCofreAtual, new ChestKeyResult(key, chunk.getTexto()));
-                        else cofresFalhados.add(chaveCofreAtual);
+                        lastChestKey = key != null ? key : "null";
+                        if (key != null) {
+                            lastChestResult = "key ready → submitting";
+                            readyChestKeys.put(chaveCofreAtual, new ChestKeyResult(key, chunk.getTexto()));
+                            // Recover if nav gave up on this chest while we computed.
+                            cofresFalhados.remove(chaveCofreAtual);
+                            chestNavAttempts.remove(chaveCofreAtual);
+                        } else {
+                            lastChestResult = "LLM returned null key";
+                            cofresFalhados.add(chaveCofreAtual);
+                        }
                     } catch (Exception e) {
+                        lastChestResult = "error: " + e.getMessage();
                         System.err.println("[Agente] Erro async cofre: " + e.getMessage());
                         cofresFalhados.add(chaveCofreAtual);
                     } finally {
@@ -391,10 +430,12 @@ public class Agent {
                 t.setDaemon(true);
                 t.start();
             } else {
-                estadoRAG = "A computar chave...";
+                estadoRAG = "A computar chave (" + chaveCofreAtual + ")...";
             }
-            // Explore while key is being computed; navegarParaCofre will bring us back.
-            return explorarPorCalor(percepcao);
+            // We are standing ON the chest while its key computes (fast now on GPU).
+            // Wait in place instead of wandering off and navigating back — that
+            // round-trip is the "humping" that burned energy for nothing.
+            return aguardarNoLugar(percepcao);
         }
 
         // 3. Fast tactical LLM override — only for combat-capable modes.
@@ -501,30 +542,60 @@ public class Agent {
     }
 
     private String submeterChaveCofre(ChestKeyResult result, String chave) {
+        lastChestKey = result.key;
         try {
-            estadoRAG = "A submeter chave: " + result.key;
-            System.out.println("[Agente] Cofre " + chave + " — a submeter chave: " + result.key);
+            estadoRAG = "A submeter: " + result.key;
+            System.out.println("[Agente] Cofre " + chave + " — submeter chave: " + result.key);
             JsonObject resposta = arenaClient.desbloquearCofre(result.key, result.chunkText, result.key);
             if (resposta != null) {
                 String status = resposta.has("status") ? resposta.get("status").getAsString() : "";
                 if ("sucesso".equals(status)) {
                     cofresAbertos++;
+                    lastChestResult = "✓ ABERTO (+" + result.key + ")";
                     estadoRAG = "✓ Cofre aberto! +100HP";
                     System.out.println("[Agente] COFRE ABERTO! +100 HP");
                     filaAcoesPlaneadas.add("MOVER_NORTE");
                     filaAcoesPlaneadas.add("MOVER_NORTE");
                 } else {
+                    lastChestResult = "✗ errada: " + result.key;
                     estadoRAG = "✗ Chave errada (-10 HP)";
-                    System.err.println("[Agente] Chave errada. Penalização -10 HP.");
+                    System.err.println("[Agente] Chave errada: " + result.key);
                     cofresFalhados.add(chave);
                 }
+            } else {
+                // null body from the server = key rejected without status object
+                lastChestResult = "✗ rejeitada: " + result.key;
+                estadoRAG = "✗ Chave rejeitada (-10 HP)";
+                System.err.println("[Agente] Chave rejeitada pelo servidor: " + result.key);
+                cofresFalhados.add(chave);
             }
         } catch (Exception e) {
+            lastChestResult = "erro HTTP: " + e.getMessage();
             estadoRAG = "Erro ao submeter: " + e.getMessage();
             System.err.println("[Agente] Erro ao submeter chave: " + e.getMessage());
             cofresFalhados.add(chave);
         }
         return explorarPorCalor(null);
+    }
+
+    private String filtrarMovimentoCombate(String acao, JsonObject percepcao) {
+        if (percepcao == null || !percepcao.has("outros_robots")) return acao;
+        int nx = xAtual, ny = yAtual;
+        switch (acao) {
+            case "MOVER_NORTE": ny++; break;
+            case "MOVER_SUL":   ny--; break;
+            case "MOVER_ESTE":  nx++; break;
+            case "MOVER_OESTE": nx--; break;
+            default: return acao;
+        }
+        try {
+            for (JsonElement e : percepcao.get("outros_robots").getAsJsonArray()) {
+                JsonObject r = e.getAsJsonObject();
+                if (r.get("x").getAsInt() == nx && r.get("y").getAsInt() == ny)
+                    return explorarPorCalor(percepcao); // would walk into rival — redirect
+            }
+        } catch (Exception ignored) {}
+        return acao;
     }
 
 
@@ -675,9 +746,13 @@ public class Agent {
 
                 if (cofresFalhados.contains(chaveCofre)) continue;
 
-                // Give up on unreachable chests after MAX_CHEST_NAV_ATTEMPTS ticks targeting them.
+                // Give up on unreachable chests after MAX_CHEST_NAV_ATTEMPTS ticks
+                // targeting them — but never while its key is still being computed
+                // or is ready to submit (waiting on the LLM is not "unreachable").
+                boolean keyPending = computingChests.contains(chaveCofre)
+                        || readyChestKeys.containsKey(chaveCofre);
                 int attempts = chestNavAttempts.getOrDefault(chaveCofre, 0);
-                if (attempts > MAX_CHEST_NAV_ATTEMPTS) {
+                if (!keyPending && attempts > MAX_CHEST_NAV_ATTEMPTS) {
                     cofresFalhados.add(chaveCofre);
                     System.err.println("[Agente] Cofre " + chaveCofre + " inacessível após " + attempts + " tentativas. A ignorar.");
                     continue;
@@ -693,7 +768,8 @@ public class Agent {
 
             if (alvoX != -1) {
                 String key = alvoX + "," + alvoY;
-                chestNavAttempts.merge(key, 1, Integer::sum);
+                if (!computingChests.contains(key) && !readyChestKeys.containsKey(key))
+                    chestNavAttempts.merge(key, 1, Integer::sum);
                 return moverEmDirecao(alvoX, alvoY);
             }
         } catch (Exception e) {
@@ -703,31 +779,20 @@ public class Agent {
     }
 
 
-    private String explorarPorCalor(JsonObject percepcao) {
-        // Calcular as 4 posições candidatas
-        int[][] candidatos = {
-                {xAtual, yAtual - 1},
-                {xAtual, yAtual + 1},
-                {xAtual + 1, yAtual},
-                {xAtual - 1, yAtual}
-        };
-        String[] acoes = {"MOVER_NORTE", "MOVER_SUL", "MOVER_ESTE", "MOVER_OESTE"};
-
-
+    /** Build the set of impassable cells this tick (walls, and rivals for avoid modes). */
+    private Set<String> colherParedes(JsonObject percepcao) {
         Set<String> paredes = new HashSet<>();
         if (percepcao != null && percepcao.has("objetos_fixos")) {
             try {
                 JsonElement fixosElem = percepcao.get("objetos_fixos");
                 if (fixosElem.isJsonArray()) {
-                    JsonArray fixos = fixosElem.getAsJsonArray();
-                    for (JsonElement elem : fixos) {
+                    for (JsonElement elem : fixosElem.getAsJsonArray()) {
                         JsonObject obj = elem.getAsJsonObject();
                         paredes.add(obj.get("x").getAsInt() + "," + obj.get("y").getAsInt());
                     }
                 }
             } catch (Exception ignored) {}
         }
-
         // For skipCombat / fleeFromAny modes, treat rival positions as walls so the
         // bot never accidentally walks into an opponent during exploration.
         if (config.skipCombat || config.fleeFromAny) {
@@ -740,27 +805,106 @@ public class Agent {
                 } catch (Exception ignored) {}
             }
         }
+        return paredes;
+    }
 
+    /**
+     * Stay on the current cell by moving into a known wall (blocked = no
+     * displacement). Used while a chest key computes under us. Falls back to a
+     * single exploration step only if no neighbour is a confirmed wall.
+     */
+    private String aguardarNoLugar(JsonObject percepcao) {
+        Set<String> paredes = colherParedes(percepcao);
+        int[][] candidatos = {{xAtual, yAtual - 1}, {xAtual, yAtual + 1},
+                              {xAtual + 1, yAtual}, {xAtual - 1, yAtual}};
+        String[] acoes = {"MOVER_NORTE", "MOVER_SUL", "MOVER_ESTE", "MOVER_OESTE"};
+        for (int i = 0; i < candidatos.length; i++) {
+            if (paredes.contains(candidatos[i][0] + "," + candidatos[i][1]))
+                return acoes[i]; // blocked → we don't move, just burn the tick waiting
+        }
+        return explorarPorCalor(percepcao); // open on all sides — can't stay put
+    }
 
-        // Collect candidates with equal minimum heat, then pick randomly among them.
-        // Random tie-breaking prevents the deterministic lawnmower pattern.
-        int menorCalor = Integer.MAX_VALUE;
+    private static boolean saoOpostos(String a, String b) {
+        if (a == null || b == null) return false;
+        return (a.equals("MOVER_NORTE") && b.equals("MOVER_SUL"))
+            || (a.equals("MOVER_SUL")   && b.equals("MOVER_NORTE"))
+            || (a.equals("MOVER_ESTE")  && b.equals("MOVER_OESTE"))
+            || (a.equals("MOVER_OESTE") && b.equals("MOVER_ESTE"));
+    }
+
+    /**
+     * Nearest never-visited cell inside the observed-bounds box (+1 margin), so
+     * exploration heads toward genuine frontier — including map corners — instead
+     * of diffusing locally. Returns null once the whole known box is visited.
+     */
+    private int[] escolherAlvoFronteira(Set<String> paredes) {
+        if (obsMinX == Integer.MAX_VALUE) return null; // no bounds yet
+        int loX = obsMinX - 1, hiX = obsMaxX + 1;
+        int loY = obsMinY - 1, hiY = obsMaxY + 1;
+        int melhorDist = Integer.MAX_VALUE;
+        int[] alvo = null;
+        for (int x = loX; x <= hiX; x++) {
+            for (int y = loY; y <= hiY; y++) {
+                String chave = x + "," + y;
+                if (historicoVisitas.getOrDefault(chave, 0) != 0) continue; // already seen
+                if (paredes.contains(chave)) continue;
+                int dist = Math.abs(x - xAtual) + Math.abs(y - yAtual);
+                if (dist > 0 && dist < melhorDist) {
+                    melhorDist = dist;
+                    alvo = new int[]{x, y};
+                }
+            }
+        }
+        return alvo;
+    }
+
+    private String explorarPorCalor(JsonObject percepcao) {
+        int[][] candidatos = {
+                {xAtual, yAtual - 1},
+                {xAtual, yAtual + 1},
+                {xAtual + 1, yAtual},
+                {xAtual - 1, yAtual}
+        };
+        String[] acoes = {"MOVER_NORTE", "MOVER_SUL", "MOVER_ESTE", "MOVER_OESTE"};
+
+        Set<String> paredes = colherParedes(percepcao);
+        String posAtual = xAtual + "," + yAtual;
+
+        // Pick / refresh a frontier target. Repick when reached, invalid, or when
+        // we failed to move last tick (blocked → the target is unreachable this way).
+        boolean stuck = posAtual.equals(lastExplorePos);
+        boolean alvoInvalido = exploreTarget == null
+                || (exploreTarget[0] == xAtual && exploreTarget[1] == yAtual)
+                || historicoVisitas.getOrDefault(exploreTarget[0] + "," + exploreTarget[1], 0) != 0;
+        if (stuck || alvoInvalido) {
+            if (stuck && exploreTarget != null)
+                historicoVisitas.merge(posAtual, 3, Integer::sum); // discourage this dead-end
+            exploreTarget = escolherAlvoFronteira(paredes);
+        }
+
+        // Score each open neighbour. Frontier distance dominates (momentum toward
+        // unexplored), then heat, then anti-backtrack / reversal penalties.
+        long melhorScore = Long.MAX_VALUE;
         List<String> melhores = new ArrayList<>(4);
 
         for (int i = 0; i < candidatos.length; i++) {
             int cx = candidatos[i][0];
             int cy = candidatos[i][1];
-            String chave = cx + "," + cy;
+            if (paredes.contains(cx + "," + cy)) continue;
 
-            if (paredes.contains(chave)) continue;
+            long score = 0;
+            if (exploreTarget != null)
+                score += 1000L * (Math.abs(cx - exploreTarget[0]) + Math.abs(cy - exploreTarget[1]));
+            score += 10L * historicoVisitas.getOrDefault(cx + "," + cy, 0);
+            if (antiBacktrack && isNearRecentPath(cx, cy)) score += 40;
+            if (saoOpostos(acoes[i], lastMove))            score += 60; // kill dithering/backtrack
 
-            int calor = historicoVisitas.getOrDefault(chave, 0);
-            if (antiBacktrack && isNearRecentPath(cx, cy)) calor += 25;
-            if (calor < menorCalor) {
-                menorCalor = calor;
+            if (score < melhorScore) {
+                melhorScore = score;
                 melhores.clear();
                 melhores.add(acoes[i]);
-            } else if (calor == menorCalor) {
+            } else if (score == melhorScore) {
                 melhores.add(acoes[i]);
             }
         }
@@ -769,6 +913,8 @@ public class Agent {
                 ? acoes[new Random().nextInt(acoes.length)]                // all walls — random
                 : melhores.get(new Random().nextInt(melhores.size()));     // random tie-break
 
+        lastMove = melhorAcao;
+        lastExplorePos = posAtual;
         return melhorAcao;
     }
 
@@ -813,6 +959,10 @@ public class Agent {
     private void registarVisita(int x, int y) {
         String chave = x + "," + y;
         historicoVisitas.merge(chave, 1, Integer::sum);
+        if (x < obsMinX) obsMinX = x;
+        if (x > obsMaxX) obsMaxX = x;
+        if (y < obsMinY) obsMinY = y;
+        if (y > obsMaxY) obsMaxY = y;
         if (antiBacktrack) {
             recentPath.addFirst(chave);
             while (recentPath.size() > RECENCY_DEPTH) recentPath.removeLast();
@@ -834,7 +984,7 @@ public class Agent {
         if (fastTactical != null) {
             FastTacticalClient.TacticalSuggestion sug = fastTactical.getSuggestion();
             if (sug != null) {
-                if (!sug.reason.isBlank()) fastReason = sug.reason;
+                fastReason = sug.reason.isBlank() ? "(no reason)" : sug.reason;
                 fastAction = sug.action;
                 fastTick   = sug.tick;
             }
@@ -865,7 +1015,8 @@ public class Agent {
                 tickCounter, s[0], s[1], s[2], s[3],
                 goalStr, fastReason, fastAction, fastTick,
                 plannerTick, rivalsTracked, rivalsClassified, ragChunks,
-                cofresTotal, cofresAbertos, cofresFalhados.size(), estadoRAG);
+                cofresTotal, cofresAbertos, cofresFalhados.size(), estadoRAG,
+                lastChestEnigma, lastChestKey, lastChestResult);
     }
 
     private long[] timingStats() {

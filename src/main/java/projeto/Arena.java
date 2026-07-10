@@ -92,7 +92,22 @@ public class Arena {
             System.err.println("[Arena] Erro unlock: HTTP " + resposta.statusCode() + " | " + respostaCorpo);
             return null;
         }
-        return JsonParser.parseString(respostaCorpo).getAsJsonObject();
+        // A rejected key is signalled by non-200 (handled above). On 200 the
+        // chest opened. The server echoes the updated estado as a JSON object,
+        // EXCEPT when the +100 reward would exceed max HP — then it returns a
+        // bare "null" body. Both are successes, so synthesise a status object.
+        try {
+            JsonElement elem = JsonParser.parseString(respostaCorpo);
+            if (elem.isJsonObject()) {
+                JsonObject obj = elem.getAsJsonObject();
+                if (!obj.has("status")) obj.addProperty("status", "sucesso");
+                return obj;
+            }
+        } catch (Exception ignored) {}
+        JsonObject sucesso = new JsonObject();
+        sucesso.addProperty("status", "sucesso");
+        sucesso.addProperty("corpo_original", respostaCorpo);
+        return sucesso;
     }
 
     public String descarregarManual() throws Exception {
