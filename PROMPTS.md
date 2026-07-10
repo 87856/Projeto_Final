@@ -66,3 +66,14 @@ See PROMPTS_FULL.md (gitignored, local only) for the doubled-down versions.
 
 36. [Pasted terminal output: multi.sh run + start.sh crashing with java.net.ConnectException at registar] — implicit "fix this".
 37. "Going to need you to include ALL prompts in a gitignored text/markdown file, with you guessing which prompts jj used. Then, you are to create another text/markdown file with these prompts but doubled down."
+38. "Non-gitignored one should be called PROMPTS.md. Gitignored one should be PROMPTS_FULL.md. Run /caveman-commit after and commit and push to my simon branch."
+39. "Keep getting errors on the chests about 'erro HTTP: Not a JSON' and then it gets cut-off."
+40. "Make sure that the telemetry sidebar can overflow if the text is too big."
+41. "Check if the LLMs in Ollama are fine."
+42. "It cannot open chests anymore. It keeps humping the chest, going back and forward every tick. Check the latest logs."
+43. "Says 'Manual não carregado'. Installing ollama-cuda as we speak. Check the latest logs (ongoing multi.sh, 2 bots). From now on, add all prompts to PROMPTS_FULL.md, and add the previous ones."
+44. "It installed. What now?" (ollama-cuda / GPU bring-up)
+45. "Done-so. [pacman upgrade ollama 0.24.0→0.31.2; ollama serve log shows library=CUDA, RTX 2060, 5.6 GiB VRAM]"
+46. "Seems to run fine, but it's constantly saying that it fails opening chests when it DOES succeed opening them. The CSV auditoria_3B9259-2.csv shows it actually opened all of them."
+47. "When it's attempting to open a chest, it keeps humping the chest still, causing it to burn energy for no reason. No-backtrack also doesn't properly work. It keeps going back to zones that it already explored. If there's a chest in a corner, it will take a very long time to find it, even in explorer mode."
+48. "Update PROMPTS.md. Run caveman-commit. Commit and push with the caveman-commit message."

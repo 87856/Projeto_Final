@@ -87,7 +87,12 @@ public class HeatMap extends JPanel {
         telPanel.setForeground(new Color(160, 210, 255));
         telPanel.setFont(new Font("Monospaced", Font.PLAIN, 11));
         telPanel.setEditable(false);
+        telPanel.setLineWrap(true);
+        telPanel.setWrapStyleWord(true);
         telPanel.setBorder(BorderFactory.createEmptyBorder(6, 8, 6, 8));
+        // Keep the user's scroll position when setText() refreshes each tick.
+        ((javax.swing.text.DefaultCaret) telPanel.getCaret())
+                .setUpdatePolicy(javax.swing.text.DefaultCaret.NEVER_UPDATE);
         JScrollPane telScroll = new JScrollPane(telPanel,
                 JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED,
                 JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
@@ -439,11 +444,14 @@ public class HeatMap extends JPanel {
             String.format(" Visible:   %-17d%n", cofresTotal) +
             String.format(" Opened:    %-17d%n", cofresAbertos) +
             String.format(" Failed:    %-17d%n", cofresFalhados) +
-            " Status: " + ragStatus + "\n" +
+            " Status:\n" +
+            wrapText(ragStatus, 25) +
             " Enigma:\n" +
             wrapText(lastEnigma, 25) +
-            " Key tried: " + lastKey + "\n" +
-            " Result:   " + lastKeyResult + "\n" +
+            " Key tried:\n" +
+            wrapText(lastKey, 25) +
+            " Result:\n" +
+            wrapText(lastKeyResult, 25) +
             "\n─── qwen2.5:1.5b (fast) ───\n" +
             String.format(" Status:    %-17s%n", llmAtivo ? "ON" : "OFF") +
             String.format(" Last tick: %-17s%n", fastTick < 0 ? "—" : "#" + fastTick) +
