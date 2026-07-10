@@ -1,3 +1,4 @@
 target/
 logs/
 *.class
+PROMPTS_FULL.md

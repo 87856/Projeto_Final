@@ -76,7 +76,10 @@ public class Agent {
     private int hpAtual = 200;
     private boolean modoLLM;
     private String ultimaAcao = "—";
-    private String estadoRAG  = "Manual não carregado";
+    private volatile String estadoRAG        = "Manual não carregado";
+    private volatile String lastChestEnigma  = "—";
+    private volatile String lastChestKey     = "—";
+    private volatile String lastChestResult  = "—";
 
     public Agent(String nomeRobo, String codigoSala, boolean modoLLM) {
         this(nomeRobo, codigoSala, modoLLM, true);
@@ -139,7 +142,11 @@ public class Agent {
         JTextField campoNome     = new JTextField(lastRun.getProperty("nome", "Alfa"));
         JTextField campoSala     = new JTextField(lastRun.getProperty("sala", "aluno_treino_2026"));
         JCheckBox  checkLLM      = new JCheckBox("Modo Heurística Pura (Sem LLM)");
-        JTextField campoServidor = new JTextField(lastRun.getProperty("servidor", SERVIDOR_ARENA));
+        // Localhost is a per-session setting — never restore it as the default.
+        String savedServer = lastRun.getProperty("servidor", SERVIDOR_ARENA);
+        if (savedServer.contains("localhost") || savedServer.contains("127.0.0.1"))
+            savedServer = SERVIDOR_ARENA;
+        JTextField campoServidor = new JTextField(savedServer);
 
         String[] servidores = {"Produção (arena.pmonteiro.ovh)", "Localhost (dev)"};
         JComboBox<String> comboServidor = new JComboBox<>(servidores);
@@ -186,7 +193,9 @@ public class Agent {
             Properties save = new Properties();
             save.setProperty("nome", nomeRobo);
             save.setProperty("sala", codigoSala);
-            save.setProperty("servidor", servidorUrl.isEmpty() ? SERVIDOR_ARENA : servidorUrl);
+            // Only persist non-localhost servers (localhost is session-only)
+            boolean isLocal = servidorUrl.contains("localhost") || servidorUrl.contains("127.0.0.1");
+            save.setProperty("servidor", (servidorUrl.isEmpty() || isLocal) ? SERVIDOR_ARENA : servidorUrl);
             save.store(out, "Arena Agent — last run");
         } catch (Exception ignored) {}
 
@@ -287,6 +296,10 @@ public class Agent {
 
                 long t0 = System.currentTimeMillis();
                 String acaoEscolhida = decidirAcao(percepcao);
+                // Safety net for skipCombat/fleeFromAny: if any code path (resource nav,
+                // chest nav, planned queue) chose a direction that walks into a rival, redirect.
+                if (config.skipCombat || config.fleeFromAny)
+                    acaoEscolhida = filtrarMovimentoCombate(acaoEscolhida, percepcao);
                 tickTimes[tickTimeHead] = System.currentTimeMillis() - t0;
                 tickTimeHead = (tickTimeHead + 1) % TIMING_SAMPLES;
                 if (tickTimeFilled < TIMING_SAMPLES) tickTimeFilled++;
@@ -373,15 +386,25 @@ public class Agent {
             } else if (!computingChests.contains(chaveCofreAtual)) {
                 computingChests.add(chaveCofreAtual);
                 final String enigmaFinal = enigma;
+                lastChestEnigma = enigma.length() > 60 ? enigma.substring(0, 57) + "..." : enigma;
+                lastChestKey    = "—";
+                lastChestResult = "computing...";
                 estadoRAG = "A pesquisar chave (async)...";
                 Thread t = new Thread(() -> {
                     try {
                         Vetores chunk = ollamaClient.encontrarChunkMaisRelevante(enigmaFinal, baseDocumentos);
-                        if (chunk == null) { cofresFalhados.add(chaveCofreAtual); return; }
+                        if (chunk == null) { lastChestResult = "no chunk found"; cofresFalhados.add(chaveCofreAtual); return; }
                         String key = ollamaClient.extrairChaveRAG(enigmaFinal, chunk.getTexto());
-                        if (key != null) readyChestKeys.put(chaveCofreAtual, new ChestKeyResult(key, chunk.getTexto()));
-                        else cofresFalhados.add(chaveCofreAtual);
+                        lastChestKey = key != null ? key : "null";
+                        if (key != null) {
+                            lastChestResult = "key ready → submitting";
+                            readyChestKeys.put(chaveCofreAtual, new ChestKeyResult(key, chunk.getTexto()));
+                        } else {
+                            lastChestResult = "LLM returned null key";
+                            cofresFalhados.add(chaveCofreAtual);
+                        }
                     } catch (Exception e) {
+                        lastChestResult = "error: " + e.getMessage();
                         System.err.println("[Agente] Erro async cofre: " + e.getMessage());
                         cofresFalhados.add(chaveCofreAtual);
                     } finally {
@@ -391,7 +414,7 @@ public class Agent {
                 t.setDaemon(true);
                 t.start();
             } else {
-                estadoRAG = "A computar chave...";
+                estadoRAG = "A computar chave (" + chaveCofreAtual + ")...";
             }
             // Explore while key is being computed; navegarParaCofre will bring us back.
             return explorarPorCalor(percepcao);
@@ -501,30 +524,54 @@ public class Agent {
     }
 
     private String submeterChaveCofre(ChestKeyResult result, String chave) {
+        lastChestKey = result.key;
         try {
-            estadoRAG = "A submeter chave: " + result.key;
-            System.out.println("[Agente] Cofre " + chave + " — a submeter chave: " + result.key);
+            estadoRAG = "A submeter: " + result.key;
+            System.out.println("[Agente] Cofre " + chave + " — submeter chave: " + result.key);
             JsonObject resposta = arenaClient.desbloquearCofre(result.key, result.chunkText, result.key);
             if (resposta != null) {
                 String status = resposta.has("status") ? resposta.get("status").getAsString() : "";
                 if ("sucesso".equals(status)) {
                     cofresAbertos++;
+                    lastChestResult = "✓ ABERTO (+" + result.key + ")";
                     estadoRAG = "✓ Cofre aberto! +100HP";
                     System.out.println("[Agente] COFRE ABERTO! +100 HP");
                     filaAcoesPlaneadas.add("MOVER_NORTE");
                     filaAcoesPlaneadas.add("MOVER_NORTE");
                 } else {
+                    lastChestResult = "✗ errada: " + result.key;
                     estadoRAG = "✗ Chave errada (-10 HP)";
-                    System.err.println("[Agente] Chave errada. Penalização -10 HP.");
+                    System.err.println("[Agente] Chave errada: " + result.key);
                     cofresFalhados.add(chave);
                 }
             }
         } catch (Exception e) {
+            lastChestResult = "erro HTTP: " + e.getMessage();
             estadoRAG = "Erro ao submeter: " + e.getMessage();
             System.err.println("[Agente] Erro ao submeter chave: " + e.getMessage());
             cofresFalhados.add(chave);
         }
         return explorarPorCalor(null);
+    }
+
+    private String filtrarMovimentoCombate(String acao, JsonObject percepcao) {
+        if (percepcao == null || !percepcao.has("outros_robots")) return acao;
+        int nx = xAtual, ny = yAtual;
+        switch (acao) {
+            case "MOVER_NORTE": ny++; break;
+            case "MOVER_SUL":   ny--; break;
+            case "MOVER_ESTE":  nx++; break;
+            case "MOVER_OESTE": nx--; break;
+            default: return acao;
+        }
+        try {
+            for (JsonElement e : percepcao.get("outros_robots").getAsJsonArray()) {
+                JsonObject r = e.getAsJsonObject();
+                if (r.get("x").getAsInt() == nx && r.get("y").getAsInt() == ny)
+                    return explorarPorCalor(percepcao); // would walk into rival — redirect
+            }
+        } catch (Exception ignored) {}
+        return acao;
     }
 
 
@@ -834,7 +881,7 @@ public class Agent {
         if (fastTactical != null) {
             FastTacticalClient.TacticalSuggestion sug = fastTactical.getSuggestion();
             if (sug != null) {
-                if (!sug.reason.isBlank()) fastReason = sug.reason;
+                fastReason = sug.reason.isBlank() ? "(no reason)" : sug.reason;
                 fastAction = sug.action;
                 fastTick   = sug.tick;
             }
@@ -865,7 +912,8 @@ public class Agent {
                 tickCounter, s[0], s[1], s[2], s[3],
                 goalStr, fastReason, fastAction, fastTick,
                 plannerTick, rivalsTracked, rivalsClassified, ragChunks,
-                cofresTotal, cofresAbertos, cofresFalhados.size(), estadoRAG);
+                cofresTotal, cofresAbertos, cofresFalhados.size(), estadoRAG,
+                lastChestEnigma, lastChestKey, lastChestResult);
     }
 
     private long[] timingStats() {
