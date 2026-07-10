@@ -76,4 +76,4 @@ See PROMPTS_FULL.md (gitignored, local only) for the doubled-down versions.
 45. "Done-so. [pacman upgrade ollama 0.24.0→0.31.2; ollama serve log shows library=CUDA, RTX 2060, 5.6 GiB VRAM]"
 46. "Seems to run fine, but it's constantly saying that it fails opening chests when it DOES succeed opening them. The CSV auditoria_3B9259-2.csv shows it actually opened all of them."
 47. "When it's attempting to open a chest, it keeps humping the chest still, causing it to burn energy for no reason. No-backtrack also doesn't properly work. It keeps going back to zones that it already explored. If there's a chest in a corner, it will take a very long time to find it, even in explorer mode."
-48. "Update PROMPTS.md. Run caveman-commit. Commit and push with the caveman-commit message."
+48. "It keeps getting stuck in the same part of the map. Monitor also always says 'Backtrack: penalised (3x3)' even when I don't pass the --no-backtrack parameter. Check the latest logs."

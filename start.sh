@@ -242,10 +242,14 @@ info "Log: $LOG_FILE  (tail -f $LOG_FILE)"
 # ---- run --------------------------------------------------------------------
 info "A iniciar o Agente Explorador..."
 echo
-java ${BOT_MODE:+-Dbot.mode="$BOT_MODE"} \
-     ${ANTI_BACKTRACK:+-Dbot.antiBacktrack=true} \
-     ${BOT_NAME:+-Dbot.name="$BOT_NAME"} \
-     ${BOT_ROOM:+-Dbot.room="$BOT_ROOM"} \
-     ${NO_GUI:+-Dbot.noGui=true} \
-     ${BOT_SERVER:+-Dbot.server="$BOT_SERVER"} \
-     -jar "$JAR" "${PASSTHROUGH[@]}" 2>&1 | tee -a "$LOG_FILE"
+# Build JVM flags conditionally. NOTE: ${VAR:+...} fires on any non-empty value,
+# and "0" is non-empty — so 0/1 toggles must be tested explicitly, not with :+.
+JAVA_FLAGS=()
+[ -n "$BOT_MODE" ]          && JAVA_FLAGS+=("-Dbot.mode=$BOT_MODE")
+[ "$ANTI_BACKTRACK" = "1" ] && JAVA_FLAGS+=("-Dbot.antiBacktrack=true")
+[ -n "$BOT_NAME" ]          && JAVA_FLAGS+=("-Dbot.name=$BOT_NAME")
+[ -n "$BOT_ROOM" ]          && JAVA_FLAGS+=("-Dbot.room=$BOT_ROOM")
+[ "$NO_GUI" = "1" ]         && JAVA_FLAGS+=("-Dbot.noGui=true")
+[ -n "$BOT_SERVER" ]        && JAVA_FLAGS+=("-Dbot.server=$BOT_SERVER")
+
+java "${JAVA_FLAGS[@]}" -jar "$JAR" "${PASSTHROUGH[@]}" 2>&1 | tee -a "$LOG_FILE"

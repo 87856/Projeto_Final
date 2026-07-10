@@ -79,6 +79,12 @@ public class Agent {
     private String lastExplorePos = null;      // stuck detection between explore calls
     private int    obsMinX = Integer.MAX_VALUE, obsMaxX = Integer.MIN_VALUE;
     private int    obsMinY = Integer.MAX_VALUE, obsMaxY = Integer.MIN_VALUE;
+    // Abandon a frontier target the bot can't get closer to (walled off) so it
+    // stops sliding along a wall in a dead-end pocket.
+    private final Set<String> frontierBlacklist = new HashSet<>();
+    private int exploreTargetBestDist = Integer.MAX_VALUE;
+    private int exploreTargetStale    = 0;
+    private static final int TARGET_STALE_LIMIT = 8;
 
     private int xAtual = 0;
     private int yAtual = 0;
@@ -849,6 +855,7 @@ public class Agent {
                 String chave = x + "," + y;
                 if (historicoVisitas.getOrDefault(chave, 0) != 0) continue; // already seen
                 if (paredes.contains(chave)) continue;
+                if (frontierBlacklist.contains(chave)) continue;            // proven unreachable
                 int dist = Math.abs(x - xAtual) + Math.abs(y - yAtual);
                 if (dist > 0 && dist < melhorDist) {
                     melhorDist = dist;
@@ -856,6 +863,9 @@ public class Agent {
                 }
             }
         }
+        // Frontier exhausted (all remaining targets blacklisted): clear so they
+        // get retried from wherever the bot has since moved to.
+        if (alvo == null && !frontierBlacklist.isEmpty()) frontierBlacklist.clear();
         return alvo;
     }
 
@@ -871,8 +881,18 @@ public class Agent {
         Set<String> paredes = colherParedes(percepcao);
         String posAtual = xAtual + "," + yAtual;
 
-        // Pick / refresh a frontier target. Repick when reached, invalid, or when
-        // we failed to move last tick (blocked → the target is unreachable this way).
+        // Track progress toward the target. If we can't get closer for several
+        // ticks, it's walled off — blacklist it and pick another (fixes sliding
+        // back and forth in a dead-end pocket).
+        if (exploreTarget != null) {
+            int d = Math.abs(xAtual - exploreTarget[0]) + Math.abs(yAtual - exploreTarget[1]);
+            if (d < exploreTargetBestDist) { exploreTargetBestDist = d; exploreTargetStale = 0; }
+            else if (++exploreTargetStale > TARGET_STALE_LIMIT) {
+                frontierBlacklist.add(exploreTarget[0] + "," + exploreTarget[1]);
+                exploreTarget = null;
+            }
+        }
+
         boolean stuck = posAtual.equals(lastExplorePos);
         boolean alvoInvalido = exploreTarget == null
                 || (exploreTarget[0] == xAtual && exploreTarget[1] == yAtual)
@@ -881,6 +901,9 @@ public class Agent {
             if (stuck && exploreTarget != null)
                 historicoVisitas.merge(posAtual, 3, Integer::sum); // discourage this dead-end
             exploreTarget = escolherAlvoFronteira(paredes);
+            exploreTargetBestDist = exploreTarget == null ? Integer.MAX_VALUE
+                    : Math.abs(xAtual - exploreTarget[0]) + Math.abs(yAtual - exploreTarget[1]);
+            exploreTargetStale = 0;
         }
 
         // Score each open neighbour. Frontier distance dominates (momentum toward
